@@ -1,0 +1,41 @@
+version: v2beta1
+name: player-service
+
+deployments:
+  app:
+    namespace: api
+    helm:
+      releaseName: player-service
+      chart:
+        name: oci://ghcr.io/groundsgg/charts/grounds-service
+        version: 0.1.0
+      values:
+        deployment:
+          image:
+            repository: player-service
+          containerPort: 9000
+          env:
+            - name: POSTGRES_URL
+              value: jdbc:postgresql://postgresql.databases:5432/app?currentSchema=player
+        service:
+          enabled: true
+          port: 9000
+          targetPort: 9000
+
+dev:
+  app:
+    # Search for the container that runs this image
+    imageSelector: player-service
+    # Replace the container image with this image
+    devImage: gradle:9.2.1-jdk25
+    # Sync files between the local filesystem and the development container
+    sync:
+      - path: ./
+    # Open a terminal and use the following command to start it
+    terminal:
+      command: |
+        export QUARKUS_ANALYTICS_DISABLED=true
+        ./gradlew --console=plain quarkusDev
+    # Forward the following ports to be able to access your application via localhost
+    ports:
+      - port: "9000"
