@@ -1,7 +1,12 @@
 package gg.grounds.api;
 
 import gg.grounds.domain.PlayerSession;
-import gg.grounds.grpc.*;
+import gg.grounds.grpc.player.LoginStatus;
+import gg.grounds.grpc.player.PlayerLoginReply;
+import gg.grounds.grpc.player.PlayerLoginRequest;
+import gg.grounds.grpc.player.PlayerLogoutReply;
+import gg.grounds.grpc.player.PlayerLogoutRequest;
+import gg.grounds.grpc.player.PlayerPresenceService;
 import gg.grounds.persistence.PlayerSessionRepository;
 import io.quarkus.grpc.GrpcClient;
 import io.quarkus.test.InjectMock;
@@ -14,7 +19,10 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.reset;

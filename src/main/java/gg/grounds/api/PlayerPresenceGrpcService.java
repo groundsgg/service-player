@@ -1,12 +1,12 @@
 package gg.grounds.api;
 
-import gg.grounds.grpc.LoginStatus;
-import gg.grounds.grpc.PlayerPresenceService;
-import gg.grounds.grpc.PlayerLoginReply;
-import gg.grounds.grpc.PlayerLoginRequest;
-import gg.grounds.grpc.PlayerLogoutReply;
-import gg.grounds.grpc.PlayerLogoutRequest;
 import gg.grounds.domain.PlayerSession;
+import gg.grounds.grpc.player.LoginStatus;
+import gg.grounds.grpc.player.PlayerLoginReply;
+import gg.grounds.grpc.player.PlayerLoginRequest;
+import gg.grounds.grpc.player.PlayerLogoutReply;
+import gg.grounds.grpc.player.PlayerLogoutRequest;
+import gg.grounds.grpc.player.PlayerPresenceService;
 import gg.grounds.persistence.PlayerSessionRepository;
 import io.quarkus.grpc.GrpcService;
 import io.smallrye.common.annotation.Blocking;

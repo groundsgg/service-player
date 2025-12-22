@@ -1,12 +1,11 @@
 package gg.grounds.persistence;
 
+import gg.grounds.domain.PlayerSession;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import javax.sql.DataSource;
 import org.jboss.logging.Logger;
 
-import gg.grounds.domain.PlayerSession;
-
+import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;

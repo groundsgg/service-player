@@ -7,6 +7,13 @@ group = "gg.grounds"
 version = "1.0.0-SNAPSHOT"
 
 repositories {
+    maven {
+        url = uri("https://maven.pkg.github.com/groundsgg/grpc-contracts")
+        credentials {
+            username = providers.gradleProperty("github.user").get()
+            password = providers.gradleProperty("github.token").get()
+        }
+    }
     mavenCentral()
 }
 
@@ -16,6 +23,7 @@ dependencies {
     implementation("io.quarkus:quarkus-grpc")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
+    implementation("gg.grounds:grpc-contracts-player:0.0.2")
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.quarkus:quarkus-junit5-mockito")
 }
