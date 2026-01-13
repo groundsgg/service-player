@@ -3,18 +3,16 @@ package gg.grounds.persistence
 import gg.grounds.domain.PlayerSession
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
-import org.jboss.logging.Logger
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Timestamp
-import java.time.Instant
 import java.util.UUID
 import javax.sql.DataSource
+import org.jboss.logging.Logger
 
 @ApplicationScoped
 class PlayerSessionRepository {
-    @Inject
-    lateinit var dataSource: DataSource
+    @Inject lateinit var dataSource: DataSource
 
     fun insertSession(session: PlayerSession): Boolean {
         return try {
@@ -74,17 +72,20 @@ class PlayerSessionRepository {
     companion object {
         private val LOG = Logger.getLogger(PlayerSessionRepository::class.java)
 
-        private const val INSERT_SESSION = """
+        private const val INSERT_SESSION =
+            """
             INSERT INTO player_sessions (player_id, connected_at)
             VALUES (?, ?)
             ON CONFLICT (player_id) DO NOTHING
             """
-        private const val SELECT_BY_PLAYER = """
+        private const val SELECT_BY_PLAYER =
+            """
             SELECT player_id, connected_at
             FROM player_sessions
             WHERE player_id = ?
             """
-        private const val DELETE_BY_PLAYER = """
+        private const val DELETE_BY_PLAYER =
+            """
             DELETE FROM player_sessions
             WHERE player_id = ?
             """

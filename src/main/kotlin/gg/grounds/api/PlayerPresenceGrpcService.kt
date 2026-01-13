@@ -12,15 +12,14 @@ import io.quarkus.grpc.GrpcService
 import io.smallrye.common.annotation.Blocking
 import io.smallrye.mutiny.Uni
 import jakarta.inject.Inject
-import org.jboss.logging.Logger
 import java.time.Instant
 import java.util.UUID
+import org.jboss.logging.Logger
 
 @GrpcService
 @Blocking
 class PlayerPresenceGrpcService : PlayerPresenceService {
-    @Inject
-    lateinit var repository: PlayerSessionRepository
+    @Inject lateinit var repository: PlayerSessionRepository
 
     override fun tryPlayerLogin(request: PlayerLoginRequest): Uni<PlayerLoginReply> {
         return Uni.createFrom().item { handleLogin(request) }
@@ -31,11 +30,12 @@ class PlayerPresenceGrpcService : PlayerPresenceService {
     }
 
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
-        val playerId = parsePlayerId(request.playerId)
-            ?: return PlayerLoginReply.newBuilder()
-                .setStatus(LoginStatus.LOGIN_STATUS_INVALID_REQUEST)
-                .setMessage("player_id must be a UUID")
-                .build()
+        val playerId =
+            parsePlayerId(request.playerId)
+                ?: return PlayerLoginReply.newBuilder()
+                    .setStatus(LoginStatus.LOGIN_STATUS_INVALID_REQUEST)
+                    .setMessage("player_id must be a UUID")
+                    .build()
 
         val session = PlayerSession(playerId, Instant.now())
         val inserted = repository.insertSession(session)
@@ -63,11 +63,12 @@ class PlayerPresenceGrpcService : PlayerPresenceService {
     }
 
     private fun handleLogout(request: PlayerLogoutRequest): PlayerLogoutReply {
-        val playerId = parsePlayerId(request.playerId)
-            ?: return PlayerLogoutReply.newBuilder()
-                .setRemoved(false)
-                .setMessage("player_id must be a UUID")
-                .build()
+        val playerId =
+            parsePlayerId(request.playerId)
+                ?: return PlayerLogoutReply.newBuilder()
+                    .setRemoved(false)
+                    .setMessage("player_id must be a UUID")
+                    .build()
 
         val removed = repository.deleteSession(playerId)
         if (removed) {

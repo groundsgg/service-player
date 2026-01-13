@@ -1,13 +1,10 @@
 plugins {
-    kotlin("jvm") version "2.3.0"
-    kotlin("plugin.allopen") version "2.3.0"
+    id("gg.grounds.root") version "0.1.1"
     id("io.quarkus") version "3.30.6"
 }
 
-group = "gg.grounds"
-version = "1.0.0-SNAPSHOT"
-
 repositories {
+    mavenCentral()
     maven {
         url = uri("https://maven.pkg.github.com/groundsgg/*")
         credentials {
@@ -15,7 +12,6 @@ repositories {
             password = providers.gradleProperty("github.token").get()
         }
     }
-    mavenCentral()
 }
 
 dependencies {
@@ -25,37 +21,20 @@ dependencies {
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
-    implementation(kotlin("stdlib"))
-    implementation("com.google.protobuf:protobuf-kotlin:4.33.4")
     implementation("gg.grounds:library-grpc-contracts-player:0.1.0")
+
+    compileOnly("com.google.protobuf:protobuf-kotlin")
 
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.quarkus:quarkus-junit5-mockito")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:6.1.0")
 }
 
-kotlin {
-    compilerOptions {
-        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25
-        javaParameters = true
+sourceSets { main { java { srcDirs("build/classes/java/quarkus-generated-sources/grpc") } } }
+
+tasks
+    .matching { it.name == "kaptGenerateStubsKotlin" }
+    .configureEach {
+        dependsOn("quarkusGenerateCode")
+        dependsOn("quarkusGenerateCodeDev")
     }
-}
-
-allOpen {
-    annotation("jakarta.ws.rs.Path")
-    annotation("jakarta.enterprise.context.ApplicationScoped")
-    annotation("jakarta.persistence.Entity")
-    annotation("io.quarkus.test.junit.QuarkusTest")
-    annotation("io.quarkus.grpc.GrpcService")
-}
-
-sourceSets {
-    main {
-        java {
-            srcDirs("build/classes/java/quarkus-generated-sources/grpc")
-        }
-    }
-}
-
-tasks.quarkusDev {
-    jvmArgs = listOf("--add-opens", "java.base/java.lang=ALL-UNNAMED")
-}
