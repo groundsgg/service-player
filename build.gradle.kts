@@ -28,6 +28,9 @@ dependencies {
     implementation(kotlin("stdlib"))
     implementation("com.google.protobuf:protobuf-kotlin:4.33.4")
     implementation("gg.grounds:library-grpc-contracts-player:0.1.0")
+
+    testImplementation("io.quarkus:quarkus-junit5")
+    testImplementation("io.quarkus:quarkus-junit5-mockito")
 }
 
 kotlin {
