@@ -1,6 +1,7 @@
 plugins {
-    java
-    id("io.quarkus") version "3.30.4"
+    kotlin("jvm") version "2.3.0"
+    kotlin("plugin.allopen") version "2.3.0"
+    id("io.quarkus") version "3.30.6"
 }
 
 group = "gg.grounds"
@@ -8,7 +9,7 @@ version = "1.0.0-SNAPSHOT"
 
 repositories {
     maven {
-        url = uri("https://maven.pkg.github.com/groundsgg/grpc-contracts")
+        url = uri("https://maven.pkg.github.com/groundsgg/*")
         credentials {
             username = providers.gradleProperty("github.user").get()
             password = providers.gradleProperty("github.token").get()
@@ -18,23 +19,30 @@ repositories {
 }
 
 dependencies {
-    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.4"))
+    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.6"))
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-grpc")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
-    implementation("gg.grounds:grpc-contracts-player:0.0.2")
-    testImplementation("io.quarkus:quarkus-junit5")
-    testImplementation("io.quarkus:quarkus-junit5-mockito")
+    implementation("io.quarkus:quarkus-kotlin")
+    implementation(kotlin("stdlib"))
+    implementation("com.google.protobuf:protobuf-kotlin:4.33.4")
+    implementation("gg.grounds:library-grpc-contracts-player:0.1.0")
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_25
-    targetCompatibility = JavaVersion.VERSION_25
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25
+        javaParameters = true
+    }
 }
 
-tasks.compileJava {
-    options.encoding = "UTF-8"
+allOpen {
+    annotation("jakarta.ws.rs.Path")
+    annotation("jakarta.enterprise.context.ApplicationScoped")
+    annotation("jakarta.persistence.Entity")
+    annotation("io.quarkus.test.junit.QuarkusTest")
+    annotation("io.quarkus.grpc.GrpcService")
 }
 
 sourceSets {
@@ -42,14 +50,6 @@ sourceSets {
         java {
             srcDirs("build/classes/java/quarkus-generated-sources/grpc")
         }
-    }
-}
-
-tasks.test {
-    jvmArgs("--add-opens=java.base/java.lang=ALL-UNNAMED")
-    testLogging {
-        // Show assertion diffs in test output
-        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
 
