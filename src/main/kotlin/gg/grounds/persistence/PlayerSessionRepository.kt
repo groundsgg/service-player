@@ -11,8 +11,12 @@ import javax.sql.DataSource
 import org.jboss.logging.Logger
 
 @ApplicationScoped
-class PlayerSessionRepository {
-    @Inject lateinit var dataSource: DataSource
+class PlayerSessionRepository @Inject constructor(private val dataSource: DataSource) {
+    enum class DeleteSessionResult {
+        REMOVED,
+        NOT_FOUND,
+        ERROR,
+    }
 
     fun insertSession(session: PlayerSession): Boolean {
         return try {
@@ -29,43 +33,45 @@ class PlayerSessionRepository {
         }
     }
 
-    fun findByPlayerId(playerId: UUID): java.util.Optional<PlayerSession> {
+    fun findByPlayerId(playerId: UUID): PlayerSession? {
         return try {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(SELECT_BY_PLAYER).use { statement ->
                     statement.setObject(1, playerId)
                     statement.executeQuery().use { resultSet ->
-                        if (!resultSet.next()) {
-                            return java.util.Optional.empty()
-                        }
-                        return java.util.Optional.of(mapSession(resultSet))
+                        if (resultSet.next()) mapSession(resultSet) else null
                     }
                 }
             }
         } catch (error: SQLException) {
             LOG.errorf(error, "Failed to fetch player session for %s", playerId)
-            java.util.Optional.empty()
+            null
         }
     }
 
-    fun deleteSession(playerId: UUID): Boolean {
+    fun deleteSession(playerId: UUID): DeleteSessionResult {
         return try {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(DELETE_BY_PLAYER).use { statement ->
                     statement.setObject(1, playerId)
-                    statement.executeUpdate() > 0
+                    if (statement.executeUpdate() > 0) DeleteSessionResult.REMOVED
+                    else DeleteSessionResult.NOT_FOUND
                 }
             }
         } catch (error: SQLException) {
             LOG.errorf(error, "Failed to delete player session for %s", playerId)
-            false
+            DeleteSessionResult.ERROR
         }
     }
 
-    @Throws(SQLException::class)
     private fun mapSession(resultSet: ResultSet): PlayerSession {
-        val playerId = resultSet.getObject("player_id", UUID::class.java)
-        val connectedAt = resultSet.getTimestamp("connected_at").toInstant()
+        val playerId =
+            requireNotNull(resultSet.getObject("player_id", UUID::class.java)) {
+                "player_id is null"
+            }
+        val connectedAt =
+            requireNotNull(resultSet.getTimestamp("connected_at")) { "connected_at is null" }
+                .toInstant()
         return PlayerSession(playerId, connectedAt)
     }
 

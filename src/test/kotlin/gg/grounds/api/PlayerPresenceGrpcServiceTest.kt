@@ -8,11 +8,11 @@ import gg.grounds.grpc.player.PlayerLogoutReply
 import gg.grounds.grpc.player.PlayerLogoutRequest
 import gg.grounds.grpc.player.PlayerPresenceService
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import io.quarkus.grpc.GrpcClient
 import io.quarkus.test.InjectMock
 import io.quarkus.test.junit.QuarkusTest
 import java.time.Instant
-import java.util.Optional
 import java.util.UUID
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -74,7 +74,7 @@ class PlayerPresenceGrpcServiceTest {
         val playerId = UUID.randomUUID()
         whenever(repository.insertSession(any())).thenReturn(false)
         whenever(repository.findByPlayerId(eq(playerId)))
-            .thenReturn(Optional.of(PlayerSession(playerId, Instant.EPOCH)))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH))
 
         val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
 
@@ -99,7 +99,7 @@ class PlayerPresenceGrpcServiceTest {
     @Test
     fun logoutRemovesSessionWhenFound() {
         val playerId = UUID.randomUUID()
-        whenever(repository.deleteSession(eq(playerId))).thenReturn(true)
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.REMOVED)
 
         val request = PlayerLogoutRequest.newBuilder().setPlayerId(" $playerId ").build()
 
@@ -113,7 +113,7 @@ class PlayerPresenceGrpcServiceTest {
     @Test
     fun logoutReturnsNotFoundWhenMissing() {
         val playerId = UUID.randomUUID()
-        whenever(repository.deleteSession(eq(playerId))).thenReturn(false)
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.NOT_FOUND)
 
         val request = PlayerLogoutRequest.newBuilder().setPlayerId(playerId.toString()).build()
 

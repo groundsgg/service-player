@@ -8,6 +8,7 @@ import gg.grounds.grpc.player.PlayerLogoutReply
 import gg.grounds.grpc.player.PlayerLogoutRequest
 import gg.grounds.grpc.player.PlayerPresenceService
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import io.quarkus.grpc.GrpcService
 import io.smallrye.common.annotation.Blocking
 import io.smallrye.mutiny.Uni
@@ -18,9 +19,9 @@ import org.jboss.logging.Logger
 
 @GrpcService
 @Blocking
-class PlayerPresenceGrpcService : PlayerPresenceService {
-    @Inject lateinit var repository: PlayerSessionRepository
-
+class PlayerPresenceGrpcService
+@Inject
+constructor(private val repository: PlayerSessionRepository) : PlayerPresenceService {
     override fun tryPlayerLogin(request: PlayerLoginRequest): Uni<PlayerLoginReply> {
         return Uni.createFrom().item { handleLogin(request) }
     }
@@ -48,7 +49,7 @@ class PlayerPresenceGrpcService : PlayerPresenceService {
         }
 
         val existing = repository.findByPlayerId(playerId)
-        if (existing.isPresent) {
+        if (existing != null) {
             LOG.infof("Player %s rejected: already online", playerId)
             return PlayerLoginReply.newBuilder()
                 .setStatus(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE)
@@ -70,23 +71,29 @@ class PlayerPresenceGrpcService : PlayerPresenceService {
                     .setMessage("player_id must be a UUID")
                     .build()
 
-        val removed = repository.deleteSession(playerId)
-        if (removed) {
-            LOG.infof("Player %s logged out", playerId)
+        return when (repository.deleteSession(playerId)) {
+            DeleteSessionResult.REMOVED -> {
+                LOG.infof("Player %s logged out", playerId)
+                PlayerLogoutReply.newBuilder().setRemoved(true).setMessage("player removed").build()
+            }
+            DeleteSessionResult.NOT_FOUND ->
+                PlayerLogoutReply.newBuilder()
+                    .setRemoved(false)
+                    .setMessage("player session not found")
+                    .build()
+            DeleteSessionResult.ERROR ->
+                PlayerLogoutReply.newBuilder()
+                    .setRemoved(false)
+                    .setMessage("unable to remove player session")
+                    .build()
         }
-
-        return PlayerLogoutReply.newBuilder()
-            .setRemoved(removed)
-            .setMessage(if (removed) "player removed" else "player session not found")
-            .build()
     }
 
     private fun parsePlayerId(value: String?): UUID? {
-        val trimmed = value?.trim().orEmpty()
-        if (trimmed.isEmpty()) {
-            return null
-        }
-        return runCatching { UUID.fromString(trimmed) }.getOrNull()
+        return value
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
     }
 
     companion object {
