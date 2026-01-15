@@ -46,6 +46,34 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/setup-buildx-action@v3
 
+      - name: Read Gradle project version
+        id: gradle_version
+        run: |
+          set -euo pipefail
+          props="$(./gradlew -q properties)"
+          version="$(printf '%s\n' "$props" | awk -F': ' '/^version: /{print $2; exit}')"
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Extract metadata
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.authors=Grounds Development Team
+            org.opencontainers.image.created={{date 'YYYY-MM-DDTHH:mm:ss.SSS[Z]'}}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://docs.grounds.gg
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.gradle_version.outputs.value }}
+            org.opencontainers.image.vendor=Grounds
+            org.opencontainers.image.ref.name=${{ github.sha }}
+            org.opencontainers.image.title=service-player
+            org.opencontainers.image.description=Quarkus-based gRPC service for player related operations.
+
       - name: Build Docker image (no push)
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/build-push-action@v6
@@ -53,6 +81,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: false
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GITHUB_USER=${{ github.actor }}
           secrets: |
