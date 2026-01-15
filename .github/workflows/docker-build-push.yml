@@ -14,7 +14,7 @@ permissions:
   actions: write
 
 jobs:
-  build-push-sbom:
+  docker-build-push:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
@@ -52,7 +52,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
           build-args: |
             GITHUB_USER=${{ github.actor }}
           secrets: |
