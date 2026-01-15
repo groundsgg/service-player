@@ -1,4 +1,4 @@
-# player-service
+# service-player
 
 Quarkus-based gRPC service for player related operations.
 
@@ -10,7 +10,7 @@ Run in dev mode with live reload:
 ./gradlew --console=plain quarkusDev
 ```
 
-Run in dev mode with live reload using DevSpace in a Kubernetes cluster:
+Run in dev mode with live reload using DevSpace in a Kubernetes cluster (Initial build may take some time):
 
 ```bash
 devspace use namespace api
