@@ -1,15 +1,15 @@
-name: CI
+name: CI Pipeline
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
-  workflow_dispatch:
+    branches: [main]
 
 permissions:
   contents: read
   packages: read
+  actions: write
 
 jobs:
   build:
@@ -41,3 +41,21 @@ jobs:
 
       - name: Test
         run: ./gradlew test
+
+      - name: Set up Docker Buildx
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (no push)
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          build-args: |
+            GITHUB_USER=${{ github.actor }}
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
