@@ -1,5 +1,7 @@
 FROM eclipse-temurin:25-jdk AS build
 
+ARG GITHUB_USER
+
 WORKDIR /workspace
 
 # copy "static" files first to improve layer caching
@@ -11,11 +13,14 @@ COPY src/ src/
 RUN --mount=type=cache,target=/root/.gradle/caches,sharing=locked \
     --mount=type=cache,target=/root/.gradle/wrapper,sharing=locked \
     --mount=type=secret,id=github_token,required=true \
-    GITHUB_TOKEN="$(cat /run/secrets/github_token)"; \
-    ./gradlew --no-daemon --stacktrace \
-      -Pgithub.user="${GITHUB_USER}" \
-      -Pgithub.token="${GITHUB_TOKEN}" \
-      quarkusBuild -x test
+    /bin/sh -euc '\
+      : "${GITHUB_USER:?GITHUB_USER build arg is required}"; \
+      token="$(cat /run/secrets/github_token)"; \
+      ./gradlew --no-daemon --stacktrace \
+        -Pgithub.user="${GITHUB_USER}" \
+        -Pgithub.token="${token}" \
+        quarkusBuild -x test \
+    '
 
 FROM gcr.io/distroless/java25-debian13 AS runtime
 
