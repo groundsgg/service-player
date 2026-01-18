@@ -3,7 +3,6 @@ name: Release Please
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,6 +11,6 @@ permissions:
 
 jobs:
   reusable:
-    uses: groundsgg/.github/.github/workflows/release-please.yml@feat/workflows
+    uses: groundsgg/.github/.github/workflows/release-please.yml@main
     secrets:
       RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}

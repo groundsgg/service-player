@@ -17,4 +17,4 @@ permissions:
 
 jobs:
   reusable:
-    uses: groundsgg/.github/.github/workflows/label-sync.yml@feat/workflows
+    uses: groundsgg/.github/.github/workflows/label-sync.yml@main
