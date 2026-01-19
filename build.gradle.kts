@@ -27,7 +27,7 @@ dependencies {
 
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.quarkus:quarkus-junit5-mockito")
-    testImplementation("org.mockito.kotlin:mockito-kotlin:6.1.0")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:6.2.1")
 }
 
 sourceSets { main { java { srcDirs("build/classes/java/quarkus-generated-sources/grpc") } } }
