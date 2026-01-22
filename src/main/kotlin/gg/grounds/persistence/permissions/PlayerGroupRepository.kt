@@ -1,22 +1,28 @@
 package gg.grounds.persistence.permissions
 
-import gg.grounds.domain.ApplyOutcome
+import gg.grounds.domain.permissions.ApplyOutcome
+import gg.grounds.domain.permissions.PlayerGroupMembership
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.SQLException
+import java.sql.Timestamp
 import java.util.UUID
 import javax.sql.DataSource
 import org.jboss.logging.Logger
 
 @ApplicationScoped
 class PlayerGroupRepository @Inject constructor(private val dataSource: DataSource) {
-    fun addPlayerGroups(playerId: UUID, groupNames: Collection<String>): ApplyOutcome {
+    fun addPlayerGroups(
+        playerId: UUID,
+        groupMemberships: Collection<PlayerGroupMembership>,
+    ): ApplyOutcome {
         return try {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(INSERT_PLAYER_GROUP).use { statement ->
-                    groupNames.forEach { groupName ->
+                    groupMemberships.forEach { membership ->
                         statement.setObject(1, playerId)
-                        statement.setString(2, groupName)
+                        statement.setString(2, membership.groupName)
+                        statement.setTimestamp(3, membership.expiresAt?.let { Timestamp.from(it) })
                         statement.addBatch()
                     }
                     val updated = BatchUpdateHelper.countSuccessful(statement.executeBatch()) > 0
@@ -28,7 +34,7 @@ class PlayerGroupRepository @Inject constructor(private val dataSource: DataSour
                 error,
                 "Failed to add player groups (playerId=%s, groupCount=%d)",
                 playerId,
-                groupNames.size,
+                groupMemberships.size,
             )
             ApplyOutcome.ERROR
         }
@@ -58,47 +64,21 @@ class PlayerGroupRepository @Inject constructor(private val dataSource: DataSour
         }
     }
 
-    fun getPlayerGroupNames(playerId: UUID): Set<String> {
-        return try {
-            dataSource.connection.use { connection ->
-                connection.prepareStatement(SELECT_PLAYER_GROUPS).use { statement ->
-                    statement.setObject(1, playerId)
-                    statement.executeQuery().use { resultSet ->
-                        val groupNames = linkedSetOf<String>()
-                        while (resultSet.next()) {
-                            resultSet.getString("group_name")?.let { groupNames.add(it) }
-                        }
-                        groupNames
-                    }
-                }
-            }
-        } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to load player groups (playerId=%s)", playerId)
-            emptySet()
-        }
-    }
-
     companion object {
         private val LOG = Logger.getLogger(PlayerGroupRepository::class.java)
 
         private const val INSERT_PLAYER_GROUP =
             """
-            INSERT INTO player_groups (player_id, group_name)
-            VALUES (?, ?)
-            ON CONFLICT (player_id, group_name) DO NOTHING
+            INSERT INTO player_groups (player_id, group_name, expires_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (player_id, group_name)
+            DO UPDATE SET expires_at = EXCLUDED.expires_at
             """
         private const val DELETE_PLAYER_GROUP =
             """
             DELETE FROM player_groups
             WHERE player_id = ?
               AND group_name = ?
-            """
-        private const val SELECT_PLAYER_GROUPS =
-            """
-            SELECT group_name
-            FROM player_groups
-            WHERE player_id = ?
-            ORDER BY group_name
             """
     }
 }

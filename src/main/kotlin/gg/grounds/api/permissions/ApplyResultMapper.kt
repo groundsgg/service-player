@@ -1,6 +1,6 @@
 package gg.grounds.api.permissions
 
-import gg.grounds.domain.ApplyOutcome
+import gg.grounds.domain.permissions.ApplyOutcome
 import gg.grounds.grpc.permissions.ApplyResult
 
 object ApplyResultMapper {
