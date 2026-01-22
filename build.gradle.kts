@@ -22,12 +22,14 @@ dependencies {
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
     implementation("gg.grounds:library-grpc-contracts-player:0.1.0")
+    implementation("gg.grounds:library-grpc-contracts-permission:local-SNAPSHOT")
 
     compileOnly("com.google.protobuf:protobuf-kotlin")
 
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.quarkus:quarkus-junit5-mockito")
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.2.2")
+    testImplementation("com.google.protobuf:protobuf-kotlin")
 }
 
 sourceSets { main { java { srcDirs("build/classes/java/quarkus-generated-sources/grpc") } } }

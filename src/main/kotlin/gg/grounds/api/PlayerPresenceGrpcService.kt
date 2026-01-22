@@ -31,17 +31,24 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
     }
 
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
+        val rawPlayerId = request.playerId?.trim().orEmpty()
         val playerId =
-            parsePlayerId(request.playerId)
-                ?: return PlayerLoginReply.newBuilder()
-                    .setStatus(LoginStatus.LOGIN_STATUS_INVALID_REQUEST)
-                    .setMessage("player_id must be a UUID")
-                    .build()
+            parsePlayerId(rawPlayerId)
+                ?: run {
+                    LOG.warnf(
+                        "Player login request rejected (playerId=%s, reason=invalid_player_id)",
+                        rawPlayerId,
+                    )
+                    return PlayerLoginReply.newBuilder()
+                        .setStatus(LoginStatus.LOGIN_STATUS_INVALID_REQUEST)
+                        .setMessage("player_id must be a UUID")
+                        .build()
+                }
 
         val session = PlayerSession(playerId, Instant.now())
         val inserted = repository.insertSession(session)
         if (inserted) {
-            LOG.infof("Player %s logged in", playerId)
+            LOG.infof("Created player session successfully (playerId=%s)", playerId)
             return PlayerLoginReply.newBuilder()
                 .setStatus(LoginStatus.LOGIN_STATUS_ACCEPTED)
                 .setMessage("player accepted")
@@ -50,7 +57,10 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
 
         val existing = repository.findByPlayerId(playerId)
         if (existing != null) {
-            LOG.infof("Player %s rejected: already online", playerId)
+            LOG.warnf(
+                "Player login request rejected because session already exists (playerId=%s)",
+                playerId,
+            )
             return PlayerLoginReply.newBuilder()
                 .setStatus(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE)
                 .setMessage("player already online")
@@ -64,16 +74,23 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
     }
 
     private fun handleLogout(request: PlayerLogoutRequest): PlayerLogoutReply {
+        val rawPlayerId = request.playerId?.trim().orEmpty()
         val playerId =
-            parsePlayerId(request.playerId)
-                ?: return PlayerLogoutReply.newBuilder()
-                    .setRemoved(false)
-                    .setMessage("player_id must be a UUID")
-                    .build()
+            parsePlayerId(rawPlayerId)
+                ?: run {
+                    LOG.warnf(
+                        "Player logout request rejected (playerId=%s, reason=invalid_player_id)",
+                        rawPlayerId,
+                    )
+                    return PlayerLogoutReply.newBuilder()
+                        .setRemoved(false)
+                        .setMessage("player_id must be a UUID")
+                        .build()
+                }
 
         return when (repository.deleteSession(playerId)) {
             DeleteSessionResult.REMOVED -> {
-                LOG.infof("Player %s logged out", playerId)
+                LOG.infof("Removed player session successfully (playerId=%s)", playerId)
                 PlayerLogoutReply.newBuilder().setRemoved(true).setMessage("player removed").build()
             }
             DeleteSessionResult.NOT_FOUND ->

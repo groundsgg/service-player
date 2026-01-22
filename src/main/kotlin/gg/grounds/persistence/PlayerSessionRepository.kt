@@ -28,7 +28,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 }
             }
         } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to insert player session for %s", session.playerId)
+            LOG.errorf(error, "Failed to insert player session (playerId=%s)", session.playerId)
             false
         }
     }
@@ -44,7 +44,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 }
             }
         } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to fetch player session for %s", playerId)
+            LOG.errorf(error, "Failed to fetch player session (playerId=%s)", playerId)
             null
         }
     }
@@ -59,7 +59,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 }
             }
         } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to delete player session for %s", playerId)
+            LOG.errorf(error, "Failed to delete player session (playerId=%s)", playerId)
             DeleteSessionResult.ERROR
         }
     }
