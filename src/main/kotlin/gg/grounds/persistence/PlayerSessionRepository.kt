@@ -64,6 +64,26 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    fun listActivePlayers(): Set<UUID> {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_ALL_PLAYERS).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        val players = linkedSetOf<UUID>()
+                        while (resultSet.next()) {
+                            val playerId = resultSet.getObject("player_id", UUID::class.java)
+                            players.add(playerId)
+                        }
+                        players
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(error, "List active players failed (reason=sql_exception)")
+            emptySet()
+        }
+    }
+
     private fun mapSession(resultSet: ResultSet): PlayerSession {
         val playerId =
             requireNotNull(resultSet.getObject("player_id", UUID::class.java)) {
@@ -94,6 +114,11 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             """
             DELETE FROM player_sessions
             WHERE player_id = ?
+            """
+        private const val SELECT_ALL_PLAYERS =
+            """
+            SELECT player_id
+            FROM player_sessions
             """
     }
 }

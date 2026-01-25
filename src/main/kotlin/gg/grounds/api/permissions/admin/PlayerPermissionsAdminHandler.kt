@@ -2,6 +2,7 @@ package gg.grounds.api.permissions.admin
 
 import gg.grounds.api.permissions.ApplyResultMapper
 import gg.grounds.api.permissions.PermissionsRequestParser
+import gg.grounds.api.permissions.events.PermissionsChangeService
 import gg.grounds.domain.permissions.ApplyOutcome
 import gg.grounds.grpc.permissions.AddPlayerPermissionsReply
 import gg.grounds.grpc.permissions.AddPlayerPermissionsRequest
@@ -17,7 +18,10 @@ import org.jboss.logging.Logger
 @ApplicationScoped
 class PlayerPermissionsAdminHandler
 @Inject
-constructor(private val playerPermissionRepository: PlayerPermissionRepository) {
+constructor(
+    private val playerPermissionRepository: PlayerPermissionRepository,
+    private val permissionsChangeService: PermissionsChangeService,
+) {
     fun addPlayerPermissions(request: AddPlayerPermissionsRequest): AddPlayerPermissionsReply {
         val rawPlayerId = request.playerId?.trim().orEmpty()
         val playerId =
@@ -54,7 +58,10 @@ constructor(private val playerPermissionRepository: PlayerPermissionRepository) 
                 .asRuntimeException()
         }
 
-        val outcome = playerPermissionRepository.addPlayerPermissions(playerId, permissionGrants)
+        val outcome =
+            permissionsChangeService.emitPlayerDeltaIfChanged(playerId, "player_permission_add") {
+                playerPermissionRepository.addPlayerPermissions(playerId, permissionGrants)
+            }
         if (outcome == ApplyOutcome.ERROR) {
             throw Status.INTERNAL.withDescription("Failed to add player permissions")
                 .asRuntimeException()
@@ -94,7 +101,13 @@ constructor(private val playerPermissionRepository: PlayerPermissionRepository) 
                 .asRuntimeException()
         }
 
-        val outcome = playerPermissionRepository.removePlayerPermissions(playerId, permissions)
+        val outcome =
+            permissionsChangeService.emitPlayerDeltaIfChanged(
+                playerId,
+                "player_permission_remove",
+            ) {
+                playerPermissionRepository.removePlayerPermissions(playerId, permissions)
+            }
         if (outcome == ApplyOutcome.ERROR) {
             throw Status.INTERNAL.withDescription("Failed to remove player permissions")
                 .asRuntimeException()

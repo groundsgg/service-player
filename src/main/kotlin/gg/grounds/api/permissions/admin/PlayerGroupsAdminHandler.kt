@@ -2,6 +2,7 @@ package gg.grounds.api.permissions.admin
 
 import gg.grounds.api.permissions.ApplyResultMapper
 import gg.grounds.api.permissions.PermissionsRequestParser
+import gg.grounds.api.permissions.events.PermissionsChangeService
 import gg.grounds.domain.permissions.ApplyOutcome
 import gg.grounds.grpc.permissions.AddPlayerGroupsReply
 import gg.grounds.grpc.permissions.AddPlayerGroupsRequest
@@ -17,7 +18,10 @@ import org.jboss.logging.Logger
 @ApplicationScoped
 class PlayerGroupsAdminHandler
 @Inject
-constructor(private val playerGroupRepository: PlayerGroupRepository) {
+constructor(
+    private val playerGroupRepository: PlayerGroupRepository,
+    private val permissionsChangeService: PermissionsChangeService,
+) {
     fun addPlayerGroups(request: AddPlayerGroupsRequest): AddPlayerGroupsReply {
         val rawPlayerId = request.playerId?.trim().orEmpty()
         val playerId =
@@ -54,7 +58,10 @@ constructor(private val playerGroupRepository: PlayerGroupRepository) {
                 .asRuntimeException()
         }
 
-        val outcome = playerGroupRepository.addPlayerGroups(playerId, groupMemberships)
+        val outcome =
+            permissionsChangeService.emitPlayerDeltaIfChanged(playerId, "player_group_add") {
+                playerGroupRepository.addPlayerGroups(playerId, groupMemberships)
+            }
         if (outcome == ApplyOutcome.ERROR) {
             throw Status.INTERNAL.withDescription("Failed to add player groups")
                 .asRuntimeException()
@@ -92,7 +99,10 @@ constructor(private val playerGroupRepository: PlayerGroupRepository) {
                 .asRuntimeException()
         }
 
-        val outcome = playerGroupRepository.removePlayerGroups(playerId, groupNames)
+        val outcome =
+            permissionsChangeService.emitPlayerDeltaIfChanged(playerId, "player_group_remove") {
+                playerGroupRepository.removePlayerGroups(playerId, groupNames)
+            }
         if (outcome == ApplyOutcome.ERROR) {
             throw Status.INTERNAL.withDescription("Failed to remove player groups")
                 .asRuntimeException()

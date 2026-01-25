@@ -1,7 +1,7 @@
 package gg.grounds.api.permissions.admin
 
+import gg.grounds.api.permissions.events.PermissionsChangeService
 import gg.grounds.domain.permissions.ApplyOutcome
-import gg.grounds.domain.permissions.PlayerGroupMembership
 import gg.grounds.grpc.permissions.AddPlayerGroupsRequest
 import gg.grounds.grpc.permissions.ApplyResult
 import gg.grounds.grpc.permissions.PlayerGroupMembership as PlayerGroupMembershipProto
@@ -14,6 +14,8 @@ import java.util.UUID
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
@@ -23,7 +25,8 @@ class PlayerGroupsAdminHandlerTest {
     @Test
     fun addPlayerGroupsRejectsInvalidPlayerId() {
         val repository = mock<PlayerGroupRepository>()
-        val handler = PlayerGroupsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerGroupsAdminHandler(repository, changeService)
         val request =
             AddPlayerGroupsRequest.newBuilder()
                 .setPlayerId("not-a-uuid")
@@ -43,9 +46,12 @@ class PlayerGroupsAdminHandlerTest {
     @Test
     fun addPlayerGroupsReturnsOutcome() {
         val repository = mock<PlayerGroupRepository>()
-        val handler = PlayerGroupsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerGroupsAdminHandler(repository, changeService)
         val playerId = UUID.randomUUID()
-        whenever(repository.addPlayerGroups(playerId, setOf(PlayerGroupMembership("vip", null))))
+        whenever(
+                changeService.emitPlayerDeltaIfChanged(eq(playerId), eq("player_group_add"), any())
+            )
             .thenReturn(ApplyOutcome.UPDATED)
         val request =
             AddPlayerGroupsRequest.newBuilder()
@@ -58,17 +64,18 @@ class PlayerGroupsAdminHandlerTest {
         val reply = handler.addPlayerGroups(request)
 
         assertEquals(ApplyResult.UPDATED, reply.applyResult)
-        verify(repository).addPlayerGroups(playerId, setOf(PlayerGroupMembership("vip", null)))
+        verify(changeService).emitPlayerDeltaIfChanged(eq(playerId), eq("player_group_add"), any())
     }
 
     @Test
     fun addPlayerGroupsAcceptsExpiry() {
         val repository = mock<PlayerGroupRepository>()
-        val handler = PlayerGroupsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerGroupsAdminHandler(repository, changeService)
         val playerId = UUID.randomUUID()
         val expiresAt = Instant.now().plusSeconds(60)
         whenever(
-                repository.addPlayerGroups(playerId, setOf(PlayerGroupMembership("vip", expiresAt)))
+                changeService.emitPlayerDeltaIfChanged(eq(playerId), eq("player_group_add"), any())
             )
             .thenReturn(ApplyOutcome.UPDATED)
         val request =
@@ -90,13 +97,14 @@ class PlayerGroupsAdminHandlerTest {
         val reply = handler.addPlayerGroups(request)
 
         assertEquals(ApplyResult.UPDATED, reply.applyResult)
-        verify(repository).addPlayerGroups(playerId, setOf(PlayerGroupMembership("vip", expiresAt)))
+        verify(changeService).emitPlayerDeltaIfChanged(eq(playerId), eq("player_group_add"), any())
     }
 
     @Test
     fun addPlayerGroupsRejectsPastExpiry() {
         val repository = mock<PlayerGroupRepository>()
-        val handler = PlayerGroupsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerGroupsAdminHandler(repository, changeService)
         val playerId = UUID.randomUUID()
         val expiresAt = Instant.now().minusSeconds(10)
         val request =
@@ -126,7 +134,8 @@ class PlayerGroupsAdminHandlerTest {
     @Test
     fun removePlayerGroupsRejectsEmptyGroupNames() {
         val repository = mock<PlayerGroupRepository>()
-        val handler = PlayerGroupsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerGroupsAdminHandler(repository, changeService)
         val request =
             RemovePlayerGroupsRequest.newBuilder().setPlayerId(UUID.randomUUID().toString()).build()
 

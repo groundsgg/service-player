@@ -8,6 +8,7 @@ import jakarta.inject.Inject
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Timestamp
+import java.time.Instant
 import javax.sql.DataSource
 import org.jboss.logging.Logger
 
@@ -155,6 +156,32 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
         }
     }
 
+    fun listGroupsWithExpiredPermissions(since: Instant, until: Instant): Set<String> {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_EXPIRED_GROUP_PERMISSIONS).use { statement ->
+                    statement.setTimestamp(1, Timestamp.from(since))
+                    statement.setTimestamp(2, Timestamp.from(until))
+                    statement.executeQuery().use { resultSet ->
+                        val groups = linkedSetOf<String>()
+                        while (resultSet.next()) {
+                            resultSet.getString("group_name")?.let { groups.add(it) }
+                        }
+                        groups
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Failed to list expired group permissions (since=%s, until=%s)",
+                since,
+                until,
+            )
+            emptySet()
+        }
+    }
+
     private fun buildGroupFromResult(groupName: String, resultSet: ResultSet): PermissionGroup? {
         val permissions = linkedSetOf<GroupPermissionGrant>()
         var sawGroup = false
@@ -252,6 +279,14 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
             DELETE FROM group_permissions
             WHERE group_name = ?
               AND permission = ?
+            """
+        private const val SELECT_EXPIRED_GROUP_PERMISSIONS =
+            """
+            SELECT DISTINCT group_name
+            FROM group_permissions
+            WHERE expires_at IS NOT NULL
+              AND expires_at > ?
+              AND expires_at <= ?
             """
     }
 }

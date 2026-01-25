@@ -3,6 +3,7 @@ package gg.grounds.api.permissions.admin
 import gg.grounds.api.permissions.ApplyResultMapper
 import gg.grounds.api.permissions.PermissionsProtoMapper
 import gg.grounds.api.permissions.PermissionsRequestParser
+import gg.grounds.api.permissions.events.PermissionsChangeService
 import gg.grounds.domain.permissions.ApplyOutcome
 import gg.grounds.grpc.permissions.AddGroupPermissionsReply
 import gg.grounds.grpc.permissions.AddGroupPermissionsRequest
@@ -25,7 +26,12 @@ import java.time.Instant
 import org.jboss.logging.Logger
 
 @ApplicationScoped
-class GroupAdminHandler @Inject constructor(private val groupRepository: GroupRepository) {
+class GroupAdminHandler
+@Inject
+constructor(
+    private val groupRepository: GroupRepository,
+    private val permissionsChangeService: PermissionsChangeService,
+) {
     fun createGroup(request: CreateGroupRequest): CreateGroupReply {
         val groupName = request.groupName?.trim().orEmpty()
         if (groupName.isEmpty()) {
@@ -148,7 +154,13 @@ class GroupAdminHandler @Inject constructor(private val groupRepository: GroupRe
                 .asRuntimeException()
         }
 
-        val outcome = groupRepository.addGroupPermissions(groupName, permissionGrants)
+        val outcome =
+            permissionsChangeService.emitGroupPermissionsDeltaIfChanged(
+                groupName,
+                "group_permission_add",
+            ) {
+                groupRepository.addGroupPermissions(groupName, permissionGrants)
+            }
         if (outcome == ApplyOutcome.ERROR) {
             throw Status.INTERNAL.withDescription("Failed to add group permissions")
                 .asRuntimeException()
@@ -181,7 +193,13 @@ class GroupAdminHandler @Inject constructor(private val groupRepository: GroupRe
                 .asRuntimeException()
         }
 
-        val outcome = groupRepository.removeGroupPermissions(groupName, permissions)
+        val outcome =
+            permissionsChangeService.emitGroupPermissionsDeltaIfChanged(
+                groupName,
+                "group_permission_remove",
+            ) {
+                groupRepository.removeGroupPermissions(groupName, permissions)
+            }
         if (outcome == ApplyOutcome.ERROR) {
             throw Status.INTERNAL.withDescription("Failed to remove group permissions")
                 .asRuntimeException()

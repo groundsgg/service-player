@@ -1,7 +1,7 @@
 package gg.grounds.api.permissions.admin
 
+import gg.grounds.api.permissions.events.PermissionsChangeService
 import gg.grounds.domain.permissions.ApplyOutcome
-import gg.grounds.domain.permissions.GroupPermissionGrant
 import gg.grounds.grpc.permissions.AddGroupPermissionsRequest
 import gg.grounds.grpc.permissions.ApplyResult
 import gg.grounds.grpc.permissions.CreateGroupRequest
@@ -14,6 +14,8 @@ import java.time.Instant
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
@@ -23,7 +25,8 @@ class GroupAdminHandlerTest {
     @Test
     fun createGroupRejectsEmptyName() {
         val repository = mock<GroupRepository>()
-        val handler = GroupAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = GroupAdminHandler(repository, changeService)
         val request = CreateGroupRequest.newBuilder().setGroupName(" ").build()
 
         val exception = assertThrows<StatusRuntimeException> { handler.createGroup(request) }
@@ -37,7 +40,8 @@ class GroupAdminHandlerTest {
     @Test
     fun createGroupReturnsOutcome() {
         val repository = mock<GroupRepository>()
-        val handler = GroupAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = GroupAdminHandler(repository, changeService)
         whenever(repository.createGroup("admins")).thenReturn(ApplyOutcome.CREATED)
         val request = CreateGroupRequest.newBuilder().setGroupName("admins").build()
 
@@ -50,7 +54,8 @@ class GroupAdminHandlerTest {
     @Test
     fun addGroupPermissionsRejectsEmptyPermissions() {
         val repository = mock<GroupRepository>()
-        val handler = GroupAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = GroupAdminHandler(repository, changeService)
         val request = AddGroupPermissionsRequest.newBuilder().setGroupName("admins").build()
 
         val exception =
@@ -65,11 +70,13 @@ class GroupAdminHandlerTest {
     @Test
     fun addGroupPermissionsReturnsOutcome() {
         val repository = mock<GroupRepository>()
-        val handler = GroupAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = GroupAdminHandler(repository, changeService)
         whenever(
-                repository.addGroupPermissions(
-                    "admins",
-                    setOf(GroupPermissionGrant("permission.read", null)),
+                changeService.emitGroupPermissionsDeltaIfChanged(
+                    eq("admins"),
+                    eq("group_permission_add"),
+                    any(),
                 )
             )
             .thenReturn(ApplyOutcome.UPDATED)
@@ -84,14 +91,15 @@ class GroupAdminHandlerTest {
         val reply = handler.addGroupPermissions(request)
 
         assertEquals(ApplyResult.UPDATED, reply.applyResult)
-        verify(repository)
-            .addGroupPermissions("admins", setOf(GroupPermissionGrant("permission.read", null)))
+        verify(changeService)
+            .emitGroupPermissionsDeltaIfChanged(eq("admins"), eq("group_permission_add"), any())
     }
 
     @Test
     fun addGroupPermissionsRejectsPastExpiry() {
         val repository = mock<GroupRepository>()
-        val handler = GroupAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = GroupAdminHandler(repository, changeService)
         val expiresAt = Instant.now().minusSeconds(10)
         val request =
             AddGroupPermissionsRequest.newBuilder()
@@ -121,8 +129,15 @@ class GroupAdminHandlerTest {
     @Test
     fun removeGroupPermissionsReturnsOutcome() {
         val repository = mock<GroupRepository>()
-        val handler = GroupAdminHandler(repository)
-        whenever(repository.removeGroupPermissions("admins", setOf("permission.read")))
+        val changeService = mock<PermissionsChangeService>()
+        val handler = GroupAdminHandler(repository, changeService)
+        whenever(
+                changeService.emitGroupPermissionsDeltaIfChanged(
+                    eq("admins"),
+                    eq("group_permission_remove"),
+                    any(),
+                )
+            )
             .thenReturn(ApplyOutcome.UPDATED)
         val request =
             RemoveGroupPermissionsRequest.newBuilder()
@@ -133,6 +148,7 @@ class GroupAdminHandlerTest {
         val reply = handler.removeGroupPermissions(request)
 
         assertEquals(ApplyResult.UPDATED, reply.applyResult)
-        verify(repository).removeGroupPermissions("admins", setOf("permission.read"))
+        verify(changeService)
+            .emitGroupPermissionsDeltaIfChanged(eq("admins"), eq("group_permission_remove"), any())
     }
 }
