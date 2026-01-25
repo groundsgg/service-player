@@ -2,6 +2,8 @@ package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
 import gg.grounds.grpc.player.LoginStatus
+import gg.grounds.grpc.player.PlayerHeartbeatBatchReply
+import gg.grounds.grpc.player.PlayerHeartbeatBatchRequest
 import gg.grounds.grpc.player.PlayerLoginReply
 import gg.grounds.grpc.player.PlayerLoginRequest
 import gg.grounds.grpc.player.PlayerLogoutReply
@@ -24,6 +26,7 @@ import org.mockito.Mockito.reset
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
@@ -67,6 +70,7 @@ class PlayerPresenceGrpcServiceTest {
         verify(repository).insertSession(sessionCaptor.capture())
         assertEquals(playerId, sessionCaptor.firstValue.playerId)
         assertNotNull(sessionCaptor.firstValue.connectedAt)
+        assertNotNull(sessionCaptor.firstValue.lastSeenAt)
     }
 
     @Test
@@ -74,7 +78,7 @@ class PlayerPresenceGrpcServiceTest {
         val playerId = UUID.randomUUID()
         whenever(repository.insertSession(any())).thenReturn(false)
         whenever(repository.findByPlayerId(eq(playerId)))
-            .thenReturn(PlayerSession(playerId, Instant.EPOCH))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.now().minusSeconds(5)))
 
         val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
 
@@ -83,6 +87,116 @@ class PlayerPresenceGrpcServiceTest {
         assertEquals(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE, reply.status)
         assertEquals("player already online", reply.message)
         verify(repository).findByPlayerId(playerId)
+    }
+
+    @Test
+    fun loginAcceptsWhenExistingSessionIsStale() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false, true)
+        whenever(repository.findByPlayerId(eq(playerId)))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.REMOVED)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ACCEPTED, reply.status)
+        assertEquals("player accepted", reply.message)
+        verify(repository).deleteSession(playerId)
+        verify(repository, times(2)).insertSession(any())
+    }
+
+    @Test
+    fun loginAcceptsWhenStaleSessionAlreadyRemoved() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false, true)
+        whenever(repository.findByPlayerId(eq(playerId)))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.NOT_FOUND)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ACCEPTED, reply.status)
+        assertEquals("player accepted", reply.message)
+        verify(repository).deleteSession(playerId)
+        verify(repository, times(2)).insertSession(any())
+    }
+
+    @Test
+    fun loginReturnsErrorWhenSessionCannotBeVerified() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false)
+        whenever(repository.findByPlayerId(eq(playerId))).thenReturn(null)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ERROR, reply.status)
+        assertEquals("unable to verify player session", reply.message)
+        verify(repository).findByPlayerId(playerId)
+    }
+
+    @Test
+    fun heartbeatBatchRejectsInvalidPlayerIds() {
+        val request =
+            PlayerHeartbeatBatchRequest.newBuilder()
+                .addPlayerIds("bad-id")
+                .addPlayerIds(UUID.randomUUID().toString())
+                .build()
+
+        val reply: PlayerHeartbeatBatchReply =
+            service.playerHeartbeatBatch(request).await().indefinitely()
+
+        assertEquals(0, reply.updated)
+        assertEquals(0, reply.missing)
+        assertEquals("player_ids must be UUIDs", reply.message)
+        verifyNoInteractions(repository)
+    }
+
+    @Test
+    fun heartbeatBatchUpdatesSessions() {
+        val first = UUID.randomUUID()
+        val second = UUID.randomUUID()
+        whenever(repository.touchSessions(eq(listOf(first, second)), any())).thenReturn(2)
+
+        val request =
+            PlayerHeartbeatBatchRequest.newBuilder()
+                .addPlayerIds(first.toString())
+                .addPlayerIds(second.toString())
+                .build()
+
+        val reply: PlayerHeartbeatBatchReply =
+            service.playerHeartbeatBatch(request).await().indefinitely()
+
+        assertEquals(2, reply.updated)
+        assertEquals(0, reply.missing)
+        assertEquals("heartbeat accepted", reply.message)
+        verify(repository).touchSessions(eq(listOf(first, second)), any())
+    }
+
+    @Test
+    fun heartbeatBatchReportsMissingSessions() {
+        val first = UUID.randomUUID()
+        val second = UUID.randomUUID()
+        whenever(repository.touchSessions(eq(listOf(first, second)), any())).thenReturn(1)
+
+        val request =
+            PlayerHeartbeatBatchRequest.newBuilder()
+                .addPlayerIds(first.toString())
+                .addPlayerIds(second.toString())
+                .build()
+
+        val reply: PlayerHeartbeatBatchReply =
+            service.playerHeartbeatBatch(request).await().indefinitely()
+
+        assertEquals(1, reply.updated)
+        assertEquals(1, reply.missing)
+        assertEquals("heartbeat accepted", reply.message)
+        verify(repository).touchSessions(eq(listOf(first, second)), any())
     }
 
     @Test
