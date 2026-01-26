@@ -17,6 +17,7 @@ class PlayerHeartbeatService @Inject constructor(private val repository: PlayerS
                 ?: return PlayerHeartbeatBatchReply.newBuilder()
                     .setUpdated(0)
                     .setMissing(0)
+                    .setSuccess(false)
                     .setMessage("player_ids must be UUIDs")
                     .also {
                         LOG.warnf(
@@ -31,6 +32,7 @@ class PlayerHeartbeatService @Inject constructor(private val repository: PlayerS
             return PlayerHeartbeatBatchReply.newBuilder()
                 .setUpdated(0)
                 .setMissing(0)
+                .setSuccess(false)
                 .setMessage("no player ids provided")
                 .build()
         }
@@ -46,6 +48,7 @@ class PlayerHeartbeatService @Inject constructor(private val repository: PlayerS
         return PlayerHeartbeatBatchReply.newBuilder()
             .setUpdated(updated)
             .setMissing(missing)
+            .setSuccess(true)
             .setMessage("heartbeat accepted")
             .build()
     }

@@ -41,6 +41,7 @@ class PlayerHeartbeatServiceTest {
 
         assertEquals(0, reply.updated)
         assertEquals(0, reply.missing)
+        assertEquals(false, reply.success)
         assertEquals("player_ids must be UUIDs", reply.message)
         verifyNoInteractions(repository)
     }
@@ -53,6 +54,7 @@ class PlayerHeartbeatServiceTest {
 
         assertEquals(0, reply.updated)
         assertEquals(0, reply.missing)
+        assertEquals(false, reply.success)
         assertEquals("no player ids provided", reply.message)
         verifyNoInteractions(repository)
     }
@@ -73,6 +75,7 @@ class PlayerHeartbeatServiceTest {
 
         assertEquals(2, reply.updated)
         assertEquals(0, reply.missing)
+        assertEquals(true, reply.success)
         assertEquals("heartbeat accepted", reply.message)
         verify(repository).touchSessions(eq(listOf(first, second)), any())
     }
@@ -93,6 +96,7 @@ class PlayerHeartbeatServiceTest {
 
         assertEquals(1, reply.updated)
         assertEquals(1, reply.missing)
+        assertEquals(true, reply.success)
         assertEquals("heartbeat accepted", reply.message)
         verify(repository).touchSessions(eq(listOf(first, second)), any())
     }
