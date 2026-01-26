@@ -21,7 +21,8 @@ dependencies {
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
-    implementation("gg.grounds:library-grpc-contracts-player:0.1.0")
+    implementation("io.quarkus:quarkus-scheduler")
+    implementation("gg.grounds:library-grpc-contracts-player:feat-player-heartbeat-SNAPSHOT")
 
     compileOnly("com.google.protobuf:protobuf-kotlin")
 

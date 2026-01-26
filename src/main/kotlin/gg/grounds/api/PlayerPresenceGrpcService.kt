@@ -2,6 +2,8 @@ package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
 import gg.grounds.grpc.player.LoginStatus
+import gg.grounds.grpc.player.PlayerHeartbeatBatchReply
+import gg.grounds.grpc.player.PlayerHeartbeatBatchRequest
 import gg.grounds.grpc.player.PlayerLoginReply
 import gg.grounds.grpc.player.PlayerLoginRequest
 import gg.grounds.grpc.player.PlayerLogoutReply
@@ -13,21 +15,35 @@ import io.quarkus.grpc.GrpcService
 import io.smallrye.common.annotation.Blocking
 import io.smallrye.mutiny.Uni
 import jakarta.inject.Inject
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
 @GrpcService
 @Blocking
 class PlayerPresenceGrpcService
 @Inject
-constructor(private val repository: PlayerSessionRepository) : PlayerPresenceService {
+constructor(
+    private val repository: PlayerSessionRepository,
+    private val heartbeatService: PlayerHeartbeatService,
+) : PlayerPresenceService {
+    @ConfigProperty(name = "grounds.player.sessions.ttl", defaultValue = "90s")
+    private lateinit var sessionTtl: Duration
+
     override fun tryPlayerLogin(request: PlayerLoginRequest): Uni<PlayerLoginReply> {
         return Uni.createFrom().item { handleLogin(request) }
     }
 
     override fun playerLogout(request: PlayerLogoutRequest): Uni<PlayerLogoutReply> {
         return Uni.createFrom().item { handleLogout(request) }
+    }
+
+    override fun playerHeartbeatBatch(
+        request: PlayerHeartbeatBatchRequest
+    ): Uni<PlayerHeartbeatBatchReply> {
+        return Uni.createFrom().item { heartbeatService.handleHeartbeatBatch(request) }
     }
 
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
@@ -38,10 +54,11 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
                     .setMessage("player_id must be a UUID")
                     .build()
 
-        val session = PlayerSession(playerId, Instant.now())
+        val now = Instant.now()
+        val session = PlayerSession(playerId, now, now)
         val inserted = repository.insertSession(session)
         if (inserted) {
-            LOG.infof("Player %s logged in", playerId)
+            LOG.infof("Player session created (playerId=%s, result=accepted)", playerId)
             return PlayerLoginReply.newBuilder()
                 .setStatus(LoginStatus.LOGIN_STATUS_ACCEPTED)
                 .setMessage("player accepted")
@@ -50,13 +67,52 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
 
         val existing = repository.findByPlayerId(playerId)
         if (existing != null) {
-            LOG.infof("Player %s rejected: already online", playerId)
+            if (isStale(existing, now)) {
+                val removed = repository.deleteSession(playerId)
+                if (removed == DeleteSessionResult.ERROR) {
+                    return PlayerLoginReply.newBuilder()
+                        .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
+                        .setMessage("unable to remove stale player session")
+                        .build()
+                }
+                if (removed == DeleteSessionResult.REMOVED) {
+                    LOG.infof(
+                        "Player session expired (playerId=%s, lastSeenAt=%s)",
+                        playerId,
+                        existing.lastSeenAt,
+                    )
+                }
+                if (removed == DeleteSessionResult.NOT_FOUND) {
+                    LOG.infof("Player session missing during stale cleanup (playerId=%s)", playerId)
+                }
+                if (repository.insertSession(session)) {
+                    LOG.infof("Player session created (playerId=%s, result=accepted)", playerId)
+                    return PlayerLoginReply.newBuilder()
+                        .setStatus(LoginStatus.LOGIN_STATUS_ACCEPTED)
+                        .setMessage("player accepted")
+                        .build()
+                }
+                val recreated = repository.findByPlayerId(playerId)
+                if (recreated == null) {
+                    LOG.errorf(
+                        "Player session recreation failed (playerId=%s, reason=insert_failed)",
+                        playerId,
+                    )
+                    return PlayerLoginReply.newBuilder()
+                        .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
+                        .setMessage("unable to create player session after stale cleanup")
+                        .build()
+                }
+            }
+
+            LOG.infof("Player session rejected (playerId=%s, reason=already_online)", playerId)
             return PlayerLoginReply.newBuilder()
                 .setStatus(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE)
                 .setMessage("player already online")
                 .build()
         }
 
+        LOG.errorf("Player session verification failed (playerId=%s)", playerId)
         return PlayerLoginReply.newBuilder()
             .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
             .setMessage("unable to verify player session")
@@ -73,7 +129,7 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
 
         return when (repository.deleteSession(playerId)) {
             DeleteSessionResult.REMOVED -> {
-                LOG.infof("Player %s logged out", playerId)
+                LOG.infof("Player session removed (playerId=%s, result=logout)", playerId)
                 PlayerLogoutReply.newBuilder().setRemoved(true).setMessage("player removed").build()
             }
             DeleteSessionResult.NOT_FOUND ->
@@ -94,6 +150,10 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+    }
+
+    private fun isStale(session: PlayerSession, now: Instant): Boolean {
+        return session.lastSeenAt.isBefore(now.minus(sessionTtl))
     }
 
     companion object {

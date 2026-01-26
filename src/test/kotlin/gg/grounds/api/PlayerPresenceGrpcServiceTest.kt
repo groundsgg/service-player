@@ -24,6 +24,7 @@ import org.mockito.Mockito.reset
 import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.times
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
@@ -67,6 +68,7 @@ class PlayerPresenceGrpcServiceTest {
         verify(repository).insertSession(sessionCaptor.capture())
         assertEquals(playerId, sessionCaptor.firstValue.playerId)
         assertNotNull(sessionCaptor.firstValue.connectedAt)
+        assertNotNull(sessionCaptor.firstValue.lastSeenAt)
     }
 
     @Test
@@ -74,7 +76,7 @@ class PlayerPresenceGrpcServiceTest {
         val playerId = UUID.randomUUID()
         whenever(repository.insertSession(any())).thenReturn(false)
         whenever(repository.findByPlayerId(eq(playerId)))
-            .thenReturn(PlayerSession(playerId, Instant.EPOCH))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.now().minusSeconds(5)))
 
         val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
 
@@ -82,6 +84,76 @@ class PlayerPresenceGrpcServiceTest {
 
         assertEquals(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE, reply.status)
         assertEquals("player already online", reply.message)
+        verify(repository).findByPlayerId(playerId)
+    }
+
+    @Test
+    fun loginAcceptsWhenExistingSessionIsStale() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false, true)
+        whenever(repository.findByPlayerId(eq(playerId)))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.REMOVED)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ACCEPTED, reply.status)
+        assertEquals("player accepted", reply.message)
+        verify(repository).deleteSession(playerId)
+        verify(repository, times(2)).insertSession(any())
+    }
+
+    @Test
+    fun loginAcceptsWhenStaleSessionAlreadyRemoved() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false, true)
+        whenever(repository.findByPlayerId(eq(playerId)))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.NOT_FOUND)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ACCEPTED, reply.status)
+        assertEquals("player accepted", reply.message)
+        verify(repository).deleteSession(playerId)
+        verify(repository, times(2)).insertSession(any())
+    }
+
+    @Test
+    fun loginReturnsErrorWhenStaleSessionReinsertFails() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false, false)
+        whenever(repository.findByPlayerId(eq(playerId)))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH), null)
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.REMOVED)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ERROR, reply.status)
+        assertEquals("unable to create player session after stale cleanup", reply.message)
+        verify(repository).deleteSession(playerId)
+        verify(repository, times(2)).insertSession(any())
+        verify(repository, times(2)).findByPlayerId(playerId)
+    }
+
+    @Test
+    fun loginReturnsErrorWhenSessionCannotBeVerified() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false)
+        whenever(repository.findByPlayerId(eq(playerId))).thenReturn(null)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ERROR, reply.status)
+        assertEquals("unable to verify player session", reply.message)
         verify(repository).findByPlayerId(playerId)
     }
 
