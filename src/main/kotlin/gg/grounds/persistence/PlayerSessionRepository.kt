@@ -28,7 +28,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 }
             }
         } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to insert player session for %s", session.playerId)
+            LOG.errorf(error, "Failed to insert player session (playerId=%s)", session.playerId)
             false
         }
     }
@@ -44,7 +44,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 }
             }
         } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to fetch player session for %s", playerId)
+            LOG.errorf(error, "Failed to fetch player session (playerId=%s)", playerId)
             null
         }
     }
@@ -59,8 +59,28 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 }
             }
         } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to delete player session for %s", playerId)
+            LOG.errorf(error, "Failed to delete player session (playerId=%s)", playerId)
             DeleteSessionResult.ERROR
+        }
+    }
+
+    fun listActivePlayers(): Set<UUID> {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_ALL_PLAYERS).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        val players = linkedSetOf<UUID>()
+                        while (resultSet.next()) {
+                            val playerId = resultSet.getObject("player_id", UUID::class.java)
+                            players.add(playerId)
+                        }
+                        players
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(error, "List active players failed (reason=sql_exception)")
+            emptySet()
         }
     }
 
@@ -94,6 +114,11 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             """
             DELETE FROM player_sessions
             WHERE player_id = ?
+            """
+        private const val SELECT_ALL_PLAYERS =
+            """
+            SELECT player_id
+            FROM player_sessions
             """
     }
 }
