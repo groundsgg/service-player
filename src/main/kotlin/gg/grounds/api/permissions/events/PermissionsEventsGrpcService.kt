@@ -5,11 +5,13 @@ import gg.grounds.grpc.permissions.PermissionsEventsService
 import gg.grounds.grpc.permissions.SubscribePermissionsChangesRequest
 import gg.grounds.persistence.PlayerSessionRepository
 import io.quarkus.grpc.GrpcService
+import io.smallrye.common.annotation.Blocking
 import io.smallrye.mutiny.Multi
 import jakarta.inject.Inject
 import org.jboss.logging.Logger
 
 @GrpcService
+@Blocking
 class PermissionsEventsGrpcService
 @Inject
 constructor(
