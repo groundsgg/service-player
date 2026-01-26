@@ -25,9 +25,12 @@ import org.jboss.logging.Logger
 @Blocking
 class PlayerPresenceGrpcService
 @Inject
-constructor(private val repository: PlayerSessionRepository) : PlayerPresenceService {
+constructor(
+    private val repository: PlayerSessionRepository,
+    private val heartbeatService: PlayerHeartbeatService,
+) : PlayerPresenceService {
     @ConfigProperty(name = "grounds.player.sessions.ttl", defaultValue = "90s")
-    lateinit var sessionTtl: Duration
+    private lateinit var sessionTtl: Duration
 
     override fun tryPlayerLogin(request: PlayerLoginRequest): Uni<PlayerLoginReply> {
         return Uni.createFrom().item { handleLogin(request) }
@@ -40,7 +43,7 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
     override fun playerHeartbeatBatch(
         request: PlayerHeartbeatBatchRequest
     ): Uni<PlayerHeartbeatBatchReply> {
-        return Uni.createFrom().item { handleHeartbeatBatch(request) }
+        return Uni.createFrom().item { heartbeatService.handleHeartbeatBatch(request) }
     }
 
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
@@ -89,6 +92,17 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
                         .setMessage("player accepted")
                         .build()
                 }
+                val recreated = repository.findByPlayerId(playerId)
+                if (recreated == null) {
+                    LOG.errorf(
+                        "Player session recreation failed (playerId=%s, reason=insert_failed)",
+                        playerId,
+                    )
+                    return PlayerLoginReply.newBuilder()
+                        .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
+                        .setMessage("unable to create player session after stale cleanup")
+                        .build()
+                }
             }
 
             LOG.infof("Player session rejected (playerId=%s, reason=already_online)", playerId)
@@ -102,47 +116,6 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
         return PlayerLoginReply.newBuilder()
             .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
             .setMessage("unable to verify player session")
-            .build()
-    }
-
-    private fun handleHeartbeatBatch(
-        request: PlayerHeartbeatBatchRequest
-    ): PlayerHeartbeatBatchReply {
-        val playerIds =
-            parsePlayerIds(request.playerIdsList)
-                ?: return PlayerHeartbeatBatchReply.newBuilder()
-                    .setUpdated(0)
-                    .setMissing(0)
-                    .setMessage("player_ids must be UUIDs")
-                    .also {
-                        LOG.warnf(
-                            "Player heartbeat batch rejected (count=%d, reason=invalid_player_ids)",
-                            request.playerIdsList.size,
-                        )
-                    }
-                    .build()
-
-        if (playerIds.isEmpty()) {
-            LOG.debugf("Player heartbeat batch skipped (count=0, reason=empty_request)")
-            return PlayerHeartbeatBatchReply.newBuilder()
-                .setUpdated(0)
-                .setMissing(0)
-                .setMessage("no player ids provided")
-                .build()
-        }
-
-        val updated = repository.touchSessions(playerIds, Instant.now())
-        val missing = (playerIds.size - updated).coerceAtLeast(0)
-        LOG.debugf(
-            "Player heartbeat batch processed (count=%d, updated=%d, missing=%d)",
-            playerIds.size,
-            updated,
-            missing,
-        )
-        return PlayerHeartbeatBatchReply.newBuilder()
-            .setUpdated(updated)
-            .setMissing(missing)
-            .setMessage("heartbeat accepted")
             .build()
     }
 
@@ -177,18 +150,6 @@ constructor(private val repository: PlayerSessionRepository) : PlayerPresenceSer
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-    }
-
-    private fun parsePlayerIds(values: List<String>): List<UUID>? {
-        if (values.isEmpty()) {
-            return emptyList()
-        }
-        val trimmed = values.map { it.trim() }
-        if (trimmed.any { it.isEmpty() }) {
-            return null
-        }
-        val parsed = trimmed.map { runCatching { UUID.fromString(it) }.getOrNull() }
-        return if (parsed.any { it == null }) null else parsed.filterNotNull()
     }
 
     private fun isStale(session: PlayerSession, now: Instant): Boolean {
