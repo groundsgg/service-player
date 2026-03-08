@@ -1,22 +1,28 @@
 package gg.grounds.persistence.permissions
 
-import gg.grounds.domain.ApplyOutcome
+import gg.grounds.domain.permissions.ApplyOutcome
+import gg.grounds.domain.permissions.PlayerPermissionGrant
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.SQLException
+import java.sql.Timestamp
 import java.util.UUID
 import javax.sql.DataSource
 import org.jboss.logging.Logger
 
 @ApplicationScoped
 class PlayerPermissionRepository @Inject constructor(private val dataSource: DataSource) {
-    fun addPlayerPermissions(playerId: UUID, permissions: Collection<String>): ApplyOutcome {
+    fun addPlayerPermissions(
+        playerId: UUID,
+        permissionGrants: Collection<PlayerPermissionGrant>,
+    ): ApplyOutcome {
         return try {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(INSERT_PLAYER_PERMISSION).use { statement ->
-                    permissions.forEach { permission ->
+                    permissionGrants.forEach { grant ->
                         statement.setObject(1, playerId)
-                        statement.setString(2, permission)
+                        statement.setString(2, grant.permission)
+                        statement.setTimestamp(3, grant.expiresAt?.let { Timestamp.from(it) })
                         statement.addBatch()
                     }
                     val updated = BatchUpdateHelper.countSuccessful(statement.executeBatch()) > 0
@@ -28,7 +34,7 @@ class PlayerPermissionRepository @Inject constructor(private val dataSource: Dat
                 error,
                 "Failed to add player permissions (playerId=%s, permissionsCount=%d)",
                 playerId,
-                permissions.size,
+                permissionGrants.size,
             )
             ApplyOutcome.ERROR
         }
@@ -58,47 +64,21 @@ class PlayerPermissionRepository @Inject constructor(private val dataSource: Dat
         }
     }
 
-    fun getPlayerPermissions(playerId: UUID): Set<String> {
-        return try {
-            dataSource.connection.use { connection ->
-                connection.prepareStatement(SELECT_PLAYER_PERMISSIONS).use { statement ->
-                    statement.setObject(1, playerId)
-                    statement.executeQuery().use { resultSet ->
-                        val permissions = linkedSetOf<String>()
-                        while (resultSet.next()) {
-                            resultSet.getString("permission")?.let { permissions.add(it) }
-                        }
-                        permissions
-                    }
-                }
-            }
-        } catch (error: SQLException) {
-            LOG.errorf(error, "Failed to load player permissions (playerId=%s)", playerId)
-            emptySet()
-        }
-    }
-
     companion object {
         private val LOG = Logger.getLogger(PlayerPermissionRepository::class.java)
 
         private const val INSERT_PLAYER_PERMISSION =
             """
-            INSERT INTO player_permissions (player_id, permission)
-            VALUES (?, ?)
-            ON CONFLICT (player_id, permission) DO NOTHING
+            INSERT INTO player_permissions (player_id, permission, expires_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (player_id, permission)
+            DO UPDATE SET expires_at = EXCLUDED.expires_at
             """
         private const val DELETE_PLAYER_PERMISSION =
             """
             DELETE FROM player_permissions
             WHERE player_id = ?
               AND permission = ?
-            """
-        private const val SELECT_PLAYER_PERMISSIONS =
-            """
-            SELECT permission
-            FROM player_permissions
-            WHERE player_id = ?
-            ORDER BY permission
             """
     }
 }

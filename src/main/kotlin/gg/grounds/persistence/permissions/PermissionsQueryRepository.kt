@@ -1,6 +1,8 @@
 package gg.grounds.persistence.permissions
 
-import gg.grounds.domain.PlayerPermissionsData
+import gg.grounds.domain.permissions.PlayerGroupMembership
+import gg.grounds.domain.permissions.PlayerPermissionGrant
+import gg.grounds.domain.permissions.PlayerPermissionsData
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.SQLException
@@ -26,9 +28,16 @@ class PermissionsQueryRepository @Inject constructor(private val dataSource: Dat
                         connection.prepareStatement(SELECT_PLAYER_GROUPS).use { statement ->
                             statement.setObject(1, playerId)
                             statement.executeQuery().use { resultSet ->
-                                val names = linkedSetOf<String>()
+                                val names = linkedSetOf<PlayerGroupMembership>()
                                 while (resultSet.next()) {
-                                    resultSet.getString("group_name")?.let { names.add(it) }
+                                    resultSet.getString("group_name")?.let { groupName ->
+                                        names.add(
+                                            PlayerGroupMembership(
+                                                groupName,
+                                                resultSet.getTimestamp("expires_at")?.toInstant(),
+                                            )
+                                        )
+                                    }
                                 }
                                 names
                             }
@@ -42,9 +51,16 @@ class PermissionsQueryRepository @Inject constructor(private val dataSource: Dat
                         connection.prepareStatement(SELECT_PLAYER_PERMISSIONS).use { statement ->
                             statement.setObject(1, playerId)
                             statement.executeQuery().use { resultSet ->
-                                val permissions = linkedSetOf<String>()
+                                val permissions = linkedSetOf<PlayerPermissionGrant>()
                                 while (resultSet.next()) {
-                                    resultSet.getString("permission")?.let { permissions.add(it) }
+                                    resultSet.getString("permission")?.let { permission ->
+                                        permissions.add(
+                                            PlayerPermissionGrant(
+                                                permission,
+                                                resultSet.getTimestamp("expires_at")?.toInstant(),
+                                            )
+                                        )
+                                    }
                                 }
                                 permissions
                             }
@@ -53,14 +69,16 @@ class PermissionsQueryRepository @Inject constructor(private val dataSource: Dat
                         emptySet()
                     }
 
-                val groupNames = if (includeGroups) loadedGroupNames else emptySet()
-                val directPermissions =
+                val groupMemberships = if (includeGroups) loadedGroupNames else emptySet()
+                val directPermissionGrants =
                     if (includeDirectPermissions) loadedDirectPermissions else emptySet()
 
                 val effectivePermissions =
                     if (includeEffectivePermissions) {
                         val permissions = linkedSetOf<String>()
-                        permissions.addAll(loadedDirectPermissions)
+                        permissions.addAll(
+                            loadedDirectPermissions.map { grant -> grant.permission }
+                        )
                         connection.prepareStatement(SELECT_GROUP_PERMISSIONS_FOR_PLAYER).use {
                             statement ->
                             statement.setObject(1, playerId)
@@ -75,7 +93,12 @@ class PermissionsQueryRepository @Inject constructor(private val dataSource: Dat
                         emptySet()
                     }
 
-                PlayerPermissionsData(playerId, groupNames, directPermissions, effectivePermissions)
+                PlayerPermissionsData(
+                    playerId,
+                    groupMemberships,
+                    directPermissionGrants,
+                    effectivePermissions,
+                )
             }
         } catch (error: SQLException) {
             LOG.errorf(
@@ -117,16 +140,18 @@ class PermissionsQueryRepository @Inject constructor(private val dataSource: Dat
 
         private const val SELECT_PLAYER_GROUPS =
             """
-            SELECT group_name
+            SELECT group_name, expires_at
             FROM player_groups
             WHERE player_id = ?
+              AND (expires_at IS NULL OR expires_at > now())
             ORDER BY group_name
             """
         private const val SELECT_PLAYER_PERMISSIONS =
             """
-            SELECT permission
+            SELECT permission, expires_at
             FROM player_permissions
             WHERE player_id = ?
+              AND (expires_at IS NULL OR expires_at > now())
             ORDER BY permission
             """
         private const val SELECT_GROUP_PERMISSIONS_FOR_PLAYER =
@@ -135,6 +160,8 @@ class PermissionsQueryRepository @Inject constructor(private val dataSource: Dat
             FROM group_permissions gp
             JOIN player_groups pg ON gp.group_name = pg.group_name
             WHERE pg.player_id = ?
+              AND (pg.expires_at IS NULL OR pg.expires_at > now())
+              AND (gp.expires_at IS NULL OR gp.expires_at > now())
             ORDER BY gp.permission
             """
         private const val CHECK_PLAYER_PERMISSION =
@@ -143,12 +170,15 @@ class PermissionsQueryRepository @Inject constructor(private val dataSource: Dat
             FROM player_permissions
             WHERE player_id = ?
               AND permission = ?
+              AND (expires_at IS NULL OR expires_at > now())
             UNION
             SELECT 1
             FROM group_permissions gp
             JOIN player_groups pg ON gp.group_name = pg.group_name
             WHERE pg.player_id = ?
               AND gp.permission = ?
+              AND (pg.expires_at IS NULL OR pg.expires_at > now())
+              AND (gp.expires_at IS NULL OR gp.expires_at > now())
             LIMIT 1
             """
     }

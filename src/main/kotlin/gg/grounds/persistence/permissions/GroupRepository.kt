@@ -1,11 +1,13 @@
 package gg.grounds.persistence.permissions
 
-import gg.grounds.domain.ApplyOutcome
-import gg.grounds.domain.PermissionGroup
+import gg.grounds.domain.permissions.ApplyOutcome
+import gg.grounds.domain.permissions.GroupPermissionGrant
+import gg.grounds.domain.permissions.PermissionGroup
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.sql.Timestamp
 import javax.sql.DataSource
 import org.jboss.logging.Logger
 
@@ -68,7 +70,7 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
                 groupName,
                 includePermissions,
             )
-            null
+            throw PermissionsRepositoryException("Failed to load permission group", error)
         }
     }
 
@@ -97,17 +99,21 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
                 "Failed to list permission groups (includePermissions=%s)",
                 includePermissions,
             )
-            emptyList()
+            throw PermissionsRepositoryException("Failed to list permission groups", error)
         }
     }
 
-    fun addGroupPermissions(groupName: String, permissions: Collection<String>): ApplyOutcome {
+    fun addGroupPermissions(
+        groupName: String,
+        permissionGrants: Collection<GroupPermissionGrant>,
+    ): ApplyOutcome {
         return try {
             dataSource.connection.use { connection ->
                 connection.prepareStatement(INSERT_GROUP_PERMISSION).use { statement ->
-                    permissions.forEach { permission ->
+                    permissionGrants.forEach { grant ->
                         statement.setString(1, groupName)
-                        statement.setString(2, permission)
+                        statement.setString(2, grant.permission)
+                        statement.setTimestamp(3, grant.expiresAt?.let { Timestamp.from(it) })
                         statement.addBatch()
                     }
                     val updated = BatchUpdateHelper.countSuccessful(statement.executeBatch()) > 0
@@ -117,9 +123,9 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
         } catch (error: SQLException) {
             LOG.errorf(
                 error,
-                "Failed to add permissions to group (groupName=%s, permissionsCount=%d)",
+                "Failed to add permissions to group (groupName=%s, permissionGrantsCount=%d)",
                 groupName,
-                permissions.size,
+                permissionGrants.size,
             )
             ApplyOutcome.ERROR
         }
@@ -150,11 +156,18 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
     }
 
     private fun buildGroupFromResult(groupName: String, resultSet: ResultSet): PermissionGroup? {
-        val permissions = linkedSetOf<String>()
+        val permissions = linkedSetOf<GroupPermissionGrant>()
         var sawGroup = false
         while (resultSet.next()) {
             sawGroup = true
-            resultSet.getString("permission")?.let { permissions.add(it) }
+            resultSet.getString("permission")?.let { permission ->
+                permissions.add(
+                    GroupPermissionGrant(
+                        permission,
+                        resultSet.getTimestamp("expires_at")?.toInstant(),
+                    )
+                )
+            }
         }
         return if (sawGroup) PermissionGroup(groupName, permissions) else null
     }
@@ -162,7 +175,7 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
     private fun buildGroupsFromResult(resultSet: ResultSet): List<PermissionGroup> {
         val groups = mutableListOf<PermissionGroup>()
         var currentName: String? = null
-        var currentPermissions = linkedSetOf<String>()
+        var currentPermissions = linkedSetOf<GroupPermissionGrant>()
         while (resultSet.next()) {
             val name = resultSet.getString("name")
             if (currentName == null) {
@@ -173,7 +186,14 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
                 currentName = name
                 currentPermissions = linkedSetOf()
             }
-            resultSet.getString("permission")?.let { currentPermissions.add(it) }
+            resultSet.getString("permission")?.let { permission ->
+                currentPermissions.add(
+                    GroupPermissionGrant(
+                        permission,
+                        resultSet.getTimestamp("expires_at")?.toInstant(),
+                    )
+                )
+            }
         }
         currentName?.let { groups.add(PermissionGroup(it, currentPermissions)) }
         return groups
@@ -207,7 +227,7 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
             """
         private const val SELECT_GROUP_WITH_PERMISSIONS =
             """
-            SELECT pg.name, gp.permission
+            SELECT pg.name, gp.permission, gp.expires_at
             FROM permission_groups pg
             LEFT JOIN group_permissions gp ON gp.group_name = pg.name
             WHERE pg.name = ?
@@ -215,16 +235,17 @@ class GroupRepository @Inject constructor(private val dataSource: DataSource) {
             """
         private const val SELECT_GROUPS_WITH_PERMISSIONS =
             """
-            SELECT pg.name, gp.permission
+            SELECT pg.name, gp.permission, gp.expires_at
             FROM permission_groups pg
             LEFT JOIN group_permissions gp ON gp.group_name = pg.name
             ORDER BY pg.name, gp.permission
             """
         private const val INSERT_GROUP_PERMISSION =
             """
-            INSERT INTO group_permissions (group_name, permission)
-            VALUES (?, ?)
-            ON CONFLICT (group_name, permission) DO NOTHING
+            INSERT INTO group_permissions (group_name, permission, expires_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (group_name, permission)
+            DO UPDATE SET expires_at = EXCLUDED.expires_at
             """
         private const val DELETE_GROUP_PERMISSION =
             """

@@ -1,4 +1,4 @@
-package gg.grounds.domain
+package gg.grounds.domain.permissions
 
 enum class ApplyOutcome {
     NO_CHANGE,
