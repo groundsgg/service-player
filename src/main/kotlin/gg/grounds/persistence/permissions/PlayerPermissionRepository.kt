@@ -6,6 +6,7 @@ import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.SQLException
 import java.sql.Timestamp
+import java.time.Instant
 import java.util.UUID
 import javax.sql.DataSource
 import org.jboss.logging.Logger
@@ -64,6 +65,53 @@ class PlayerPermissionRepository @Inject constructor(private val dataSource: Dat
         }
     }
 
+    fun listPlayersWithExpiredPermissions(since: Instant, until: Instant): Set<UUID> {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_EXPIRED_PLAYER_PERMISSIONS).use { statement ->
+                    statement.setTimestamp(1, Timestamp.from(since))
+                    statement.setTimestamp(2, Timestamp.from(until))
+                    statement.executeQuery().use { resultSet ->
+                        val players = linkedSetOf<UUID>()
+                        while (resultSet.next()) {
+                            val playerId = resultSet.getObject("player_id", UUID::class.java)
+                            players.add(playerId)
+                        }
+                        players
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Failed to list expired player permissions (since=%s, until=%s)",
+                since,
+                until,
+            )
+            emptySet()
+        }
+    }
+
+    fun listPlayersWithPermissions(): Set<UUID> {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_PLAYERS_WITH_PERMISSIONS).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        val players = linkedSetOf<UUID>()
+                        while (resultSet.next()) {
+                            val playerId = resultSet.getObject("player_id", UUID::class.java)
+                            players.add(playerId)
+                        }
+                        players
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(error, "List players with permissions failed (reason=sql_exception)")
+            emptySet()
+        }
+    }
+
     companion object {
         private val LOG = Logger.getLogger(PlayerPermissionRepository::class.java)
 
@@ -79,6 +127,19 @@ class PlayerPermissionRepository @Inject constructor(private val dataSource: Dat
             DELETE FROM player_permissions
             WHERE player_id = ?
               AND permission = ?
+            """
+        private const val SELECT_EXPIRED_PLAYER_PERMISSIONS =
+            """
+            SELECT DISTINCT player_id
+            FROM player_permissions
+            WHERE expires_at IS NOT NULL
+              AND expires_at > ?
+              AND expires_at <= ?
+            """
+        private const val SELECT_PLAYERS_WITH_PERMISSIONS =
+            """
+            SELECT DISTINCT player_id
+            FROM player_permissions
             """
     }
 }

@@ -1,7 +1,7 @@
 package gg.grounds.api.permissions.admin
 
+import gg.grounds.api.permissions.events.PermissionsChangeService
 import gg.grounds.domain.permissions.ApplyOutcome
-import gg.grounds.domain.permissions.PlayerPermissionGrant
 import gg.grounds.grpc.permissions.AddPlayerPermissionsRequest
 import gg.grounds.grpc.permissions.ApplyResult
 import gg.grounds.grpc.permissions.PermissionGrant as PermissionGrantProto
@@ -14,6 +14,8 @@ import java.util.UUID
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
+import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyNoInteractions
@@ -23,7 +25,8 @@ class PlayerPermissionsAdminHandlerTest {
     @Test
     fun addPlayerPermissionsRejectsInvalidPlayerId() {
         val repository = mock<PlayerPermissionRepository>()
-        val handler = PlayerPermissionsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerPermissionsAdminHandler(repository, changeService)
         val request =
             AddPlayerPermissionsRequest.newBuilder()
                 .setPlayerId("not-a-uuid")
@@ -44,12 +47,14 @@ class PlayerPermissionsAdminHandlerTest {
     @Test
     fun addPlayerPermissionsReturnsOutcome() {
         val repository = mock<PlayerPermissionRepository>()
-        val handler = PlayerPermissionsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerPermissionsAdminHandler(repository, changeService)
         val playerId = UUID.randomUUID()
         whenever(
-                repository.addPlayerPermissions(
-                    playerId,
-                    setOf(PlayerPermissionGrant("permission.read", null)),
+                changeService.emitPlayerDeltaIfChanged(
+                    eq(playerId),
+                    eq("player_permission_add"),
+                    any(),
                 )
             )
             .thenReturn(ApplyOutcome.UPDATED)
@@ -64,20 +69,22 @@ class PlayerPermissionsAdminHandlerTest {
         val reply = handler.addPlayerPermissions(request)
 
         assertEquals(ApplyResult.UPDATED, reply.applyResult)
-        verify(repository)
-            .addPlayerPermissions(playerId, setOf(PlayerPermissionGrant("permission.read", null)))
+        verify(changeService)
+            .emitPlayerDeltaIfChanged(eq(playerId), eq("player_permission_add"), any())
     }
 
     @Test
     fun addPlayerPermissionsAcceptsExpiry() {
         val repository = mock<PlayerPermissionRepository>()
-        val handler = PlayerPermissionsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerPermissionsAdminHandler(repository, changeService)
         val playerId = UUID.randomUUID()
         val expiresAt = Instant.now().plusSeconds(60)
         whenever(
-                repository.addPlayerPermissions(
-                    playerId,
-                    setOf(PlayerPermissionGrant("permission.read", expiresAt)),
+                changeService.emitPlayerDeltaIfChanged(
+                    eq(playerId),
+                    eq("player_permission_add"),
+                    any(),
                 )
             )
             .thenReturn(ApplyOutcome.UPDATED)
@@ -100,17 +107,15 @@ class PlayerPermissionsAdminHandlerTest {
         val reply = handler.addPlayerPermissions(request)
 
         assertEquals(ApplyResult.UPDATED, reply.applyResult)
-        verify(repository)
-            .addPlayerPermissions(
-                playerId,
-                setOf(PlayerPermissionGrant("permission.read", expiresAt)),
-            )
+        verify(changeService)
+            .emitPlayerDeltaIfChanged(eq(playerId), eq("player_permission_add"), any())
     }
 
     @Test
     fun addPlayerPermissionsRejectsPastExpiry() {
         val repository = mock<PlayerPermissionRepository>()
-        val handler = PlayerPermissionsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerPermissionsAdminHandler(repository, changeService)
         val playerId = UUID.randomUUID()
         val expiresAt = Instant.now().minusSeconds(5)
         val request =
@@ -141,7 +146,8 @@ class PlayerPermissionsAdminHandlerTest {
     @Test
     fun removePlayerPermissionsRejectsEmptyPermissions() {
         val repository = mock<PlayerPermissionRepository>()
-        val handler = PlayerPermissionsAdminHandler(repository)
+        val changeService = mock<PermissionsChangeService>()
+        val handler = PlayerPermissionsAdminHandler(repository, changeService)
         val request =
             RemovePlayerPermissionsRequest.newBuilder()
                 .setPlayerId(UUID.randomUUID().toString())
