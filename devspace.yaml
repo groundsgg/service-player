@@ -12,7 +12,8 @@ deployments:
       values:
         deployment:
           image:
-            repository: service-player
+            repository: ghcr.io/groundsgg/service-player
+            tag: edge
           containerPort: 9000
           env:
             - name: POSTGRES_URL
@@ -25,7 +26,7 @@ deployments:
 dev:
   app:
     # Search for the container that runs this image
-    imageSelector: service-player
+    imageSelector: ghcr.io/groundsgg/service-player
     # Replace the container image with this image
     devImage: gradle:9.2.1-jdk25
     # Sync files between the local filesystem and the development container
