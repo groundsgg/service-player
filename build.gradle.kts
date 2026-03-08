@@ -23,7 +23,7 @@ dependencies {
     implementation("io.quarkus:quarkus-kotlin")
     implementation("io.quarkus:quarkus-scheduler")
     implementation("gg.grounds:library-grpc-contracts-player:0.2.0")
-    implementation("gg.grounds:library-grpc-contracts-permission:local-SNAPSHOT")
+    implementation("gg.grounds:library-grpc-contracts-permission:feat-perm-protos-SNAPSHOT")
 
     compileOnly("com.google.protobuf:protobuf-kotlin")
 
