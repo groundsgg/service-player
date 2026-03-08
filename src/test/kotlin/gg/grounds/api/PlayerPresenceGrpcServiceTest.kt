@@ -124,6 +124,24 @@ class PlayerPresenceGrpcServiceTest {
     }
 
     @Test
+    fun loginReturnsErrorWhenStaleSessionRemovalFails() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false)
+        whenever(repository.findByPlayerId(eq(playerId)))
+            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
+        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.ERROR)
+
+        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ERROR, reply.status)
+        assertEquals("unable to remove stale player session", reply.message)
+        verify(repository).deleteSession(playerId)
+        verify(repository, times(1)).insertSession(any())
+    }
+
+    @Test
     fun loginReturnsErrorWhenStaleSessionReinsertFails() {
         val playerId = UUID.randomUUID()
         whenever(repository.insertSession(any())).thenReturn(false, false)

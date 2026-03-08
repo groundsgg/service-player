@@ -3,6 +3,7 @@ package gg.grounds.api
 import gg.grounds.grpc.player.PlayerHeartbeatBatchReply
 import gg.grounds.grpc.player.PlayerHeartbeatBatchRequest
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.TouchSessionsResult
 import io.quarkus.test.InjectMock
 import io.quarkus.test.junit.QuarkusTest
 import jakarta.inject.Inject
@@ -63,7 +64,8 @@ class PlayerHeartbeatServiceTest {
     fun heartbeatBatchUpdatesSessions() {
         val first = UUID.randomUUID()
         val second = UUID.randomUUID()
-        whenever(repository.touchSessions(eq(listOf(first, second)), any())).thenReturn(2)
+        whenever(repository.touchSessions(eq(listOf(first, second)), any()))
+            .thenReturn(TouchSessionsResult.Updated(2))
 
         val request =
             PlayerHeartbeatBatchRequest.newBuilder()
@@ -84,7 +86,8 @@ class PlayerHeartbeatServiceTest {
     fun heartbeatBatchReportsMissingSessions() {
         val first = UUID.randomUUID()
         val second = UUID.randomUUID()
-        whenever(repository.touchSessions(eq(listOf(first, second)), any())).thenReturn(1)
+        whenever(repository.touchSessions(eq(listOf(first, second)), any()))
+            .thenReturn(TouchSessionsResult.Updated(1))
 
         val request =
             PlayerHeartbeatBatchRequest.newBuilder()
@@ -98,6 +101,28 @@ class PlayerHeartbeatServiceTest {
         assertEquals(1, reply.missing)
         assertEquals(true, reply.success)
         assertEquals("heartbeat accepted", reply.message)
+        verify(repository).touchSessions(eq(listOf(first, second)), any())
+    }
+
+    @Test
+    fun heartbeatBatchReturnsErrorWhenSessionUpdateFails() {
+        val first = UUID.randomUUID()
+        val second = UUID.randomUUID()
+        whenever(repository.touchSessions(eq(listOf(first, second)), any()))
+            .thenReturn(TouchSessionsResult.Error)
+
+        val request =
+            PlayerHeartbeatBatchRequest.newBuilder()
+                .addPlayerIds(first.toString())
+                .addPlayerIds(second.toString())
+                .build()
+
+        val reply: PlayerHeartbeatBatchReply = heartbeatService.handleHeartbeatBatch(request)
+
+        assertEquals(0, reply.updated)
+        assertEquals(2, reply.missing)
+        assertEquals(false, reply.success)
+        assertEquals("unable to update player sessions", reply.message)
         verify(repository).touchSessions(eq(listOf(first, second)), any())
     }
 }

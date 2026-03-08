@@ -70,6 +70,11 @@ constructor(
             if (isStale(existing, now)) {
                 val removed = repository.deleteSession(playerId)
                 if (removed == DeleteSessionResult.ERROR) {
+                    LOG.errorf(
+                        "Player stale session cleanup failed (playerId=%s, lastSeenAt=%s, reason=delete_failed)",
+                        playerId,
+                        existing.lastSeenAt,
+                    )
                     return PlayerLoginReply.newBuilder()
                         .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
                         .setMessage("unable to remove stale player session")
@@ -137,11 +142,16 @@ constructor(
                     .setRemoved(false)
                     .setMessage("player session not found")
                     .build()
-            DeleteSessionResult.ERROR ->
+            DeleteSessionResult.ERROR -> {
+                LOG.errorf(
+                    "Player session removal failed (playerId=%s, reason=delete_failed)",
+                    playerId,
+                )
                 PlayerLogoutReply.newBuilder()
                     .setRemoved(false)
                     .setMessage("unable to remove player session")
                     .build()
+            }
         }
     }
 

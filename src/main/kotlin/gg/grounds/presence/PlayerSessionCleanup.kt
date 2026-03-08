@@ -23,7 +23,11 @@ constructor(
     fun expireStaleSessions() {
         val cutoff = timeProvider.now().minus(sessionTtl)
         val removed = repository.deleteStaleSessions(cutoff)
-        LOG.infof("Player session cleanup completed (removed=%d, cutoff=%s)", removed, cutoff)
+        if (removed > 0) {
+            LOG.infof("Player session cleanup completed (removed=%d, cutoff=%s)", removed, cutoff)
+            return
+        }
+        LOG.debugf("Player session cleanup completed (removed=%d, cutoff=%s)", removed, cutoff)
     }
 
     companion object {

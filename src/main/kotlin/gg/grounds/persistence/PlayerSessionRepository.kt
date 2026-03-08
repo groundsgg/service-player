@@ -19,6 +19,12 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         ERROR,
     }
 
+    sealed interface TouchSessionsResult {
+        data class Updated(val count: Int) : TouchSessionsResult
+
+        data object Error : TouchSessionsResult
+    }
+
     fun insertSession(session: PlayerSession): Boolean {
         return try {
             dataSource.connection.use { connection ->
@@ -78,9 +84,9 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
-    fun touchSessions(playerIds: Collection<UUID>, lastSeenAt: Instant): Int {
+    fun touchSessions(playerIds: Collection<UUID>, lastSeenAt: Instant): TouchSessionsResult {
         if (playerIds.isEmpty()) {
-            return 0
+            return TouchSessionsResult.Updated(0)
         }
 
         return try {
@@ -89,7 +95,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                     statement.setTimestamp(1, Timestamp.from(lastSeenAt))
                     val array = connection.createArrayOf("uuid", playerIds.toTypedArray())
                     statement.setArray(2, array)
-                    statement.executeUpdate()
+                    TouchSessionsResult.Updated(statement.executeUpdate())
                 }
             }
         } catch (error: SQLException) {
@@ -98,7 +104,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 "Player session batch update failed (count=%d, reason=sql_error)",
                 playerIds.size,
             )
-            0
+            TouchSessionsResult.Error
         }
     }
 

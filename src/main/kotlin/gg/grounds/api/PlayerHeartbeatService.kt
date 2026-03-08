@@ -3,6 +3,7 @@ package gg.grounds.api
 import gg.grounds.grpc.player.PlayerHeartbeatBatchReply
 import gg.grounds.grpc.player.PlayerHeartbeatBatchRequest
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.TouchSessionsResult
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.time.Instant
@@ -37,20 +38,30 @@ class PlayerHeartbeatService @Inject constructor(private val repository: PlayerS
                 .build()
         }
 
-        val updated = repository.touchSessions(playerIds, Instant.now())
-        val missing = (playerIds.size - updated).coerceAtLeast(0)
-        LOG.debugf(
-            "Player heartbeat batch processed (count=%d, updated=%d, missing=%d)",
-            playerIds.size,
-            updated,
-            missing,
-        )
-        return PlayerHeartbeatBatchReply.newBuilder()
-            .setUpdated(updated)
-            .setMissing(missing)
-            .setSuccess(true)
-            .setMessage("heartbeat accepted")
-            .build()
+        return when (val result = repository.touchSessions(playerIds, Instant.now())) {
+            is TouchSessionsResult.Updated -> {
+                val missing = (playerIds.size - result.count).coerceAtLeast(0)
+                LOG.debugf(
+                    "Player heartbeat batch processed (count=%d, updated=%d, missing=%d)",
+                    playerIds.size,
+                    result.count,
+                    missing,
+                )
+                PlayerHeartbeatBatchReply.newBuilder()
+                    .setUpdated(result.count)
+                    .setMissing(missing)
+                    .setSuccess(true)
+                    .setMessage("heartbeat accepted")
+                    .build()
+            }
+            TouchSessionsResult.Error ->
+                PlayerHeartbeatBatchReply.newBuilder()
+                    .setUpdated(0)
+                    .setMissing(playerIds.size)
+                    .setSuccess(false)
+                    .setMessage("unable to update player sessions")
+                    .build()
+        }
     }
 
     private fun parsePlayerIds(values: List<String>): List<UUID>? {

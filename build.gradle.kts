@@ -22,7 +22,7 @@ dependencies {
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
     implementation("io.quarkus:quarkus-scheduler")
-    implementation("gg.grounds:library-grpc-contracts-player:feat-player-heartbeat-SNAPSHOT")
+    implementation("gg.grounds:library-grpc-contracts-player:0.2.0")
 
     compileOnly("com.google.protobuf:protobuf-kotlin")
 
