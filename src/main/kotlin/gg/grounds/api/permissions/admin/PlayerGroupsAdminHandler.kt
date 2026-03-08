@@ -44,9 +44,9 @@ constructor(
             throw Status.INVALID_ARGUMENT.withDescription("group_memberships must be provided")
                 .asRuntimeException()
         }
+        val now = Instant.now()
         if (
             groupMemberships.any { membership ->
-                val now = Instant.now()
                 PermissionsRequestParser.hasPastExpiry(membership.expiresAt, now)
             }
         ) {

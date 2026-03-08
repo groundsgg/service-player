@@ -47,36 +47,9 @@ constructor(
         change: () -> ApplyOutcome,
     ): ApplyOutcome {
         val playerIds = playerGroupRepository.listActivePlayersForGroup(groupName)
-        val before =
-            playerIds.associateWith { playerId ->
-                permissionsQueryRepository.getPlayerPermissions(
-                    playerId,
-                    includeEffectivePermissions = true,
-                    includeDirectPermissions = true,
-                    includeGroups = true,
-                )
-            }
         val outcome = change()
-        if (
-            outcome != ApplyOutcome.NO_CHANGE &&
-                outcome != ApplyOutcome.ERROR &&
-                playerIds.isNotEmpty()
-        ) {
-            playerIds.forEach { playerId ->
-                val after =
-                    permissionsQueryRepository.getPlayerPermissions(
-                        playerId,
-                        includeEffectivePermissions = true,
-                        includeDirectPermissions = true,
-                        includeGroups = true,
-                    )
-                permissionsChangeEmitter.emitEffectiveDelta(
-                    playerId,
-                    reason,
-                    before[playerId],
-                    after,
-                )
-            }
+        if (outcome != ApplyOutcome.NO_CHANGE && outcome != ApplyOutcome.ERROR) {
+            playerIds.forEach { playerId -> permissionsChangeEmitter.emitRefresh(playerId, reason) }
         }
         return outcome
     }
