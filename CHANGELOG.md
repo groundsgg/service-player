@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/groundsgg/service-player/compare/v0.1.0...v0.2.0) (2026-03-25)
+
+
+### Features
+
+* add player hearbeat processing ([#21](https://github.com/groundsgg/service-player/issues/21)) ([0285e6c](https://github.com/groundsgg/service-player/commit/0285e6c44d2519941a6638ae651ef8ada40dc03c))
+
 ## [0.1.0](https://github.com/groundsgg/service-player/compare/v0.0.1...v0.1.0) (2026-01-18)
 
 
