@@ -1,6 +1,6 @@
 plugins {
     id("gg.grounds.root") version "0.1.1"
-    id("io.quarkus") version "3.30.6"
+    id("io.quarkus") version "3.34.3"
 }
 
 repositories {
@@ -15,7 +15,7 @@ repositories {
 }
 
 dependencies {
-    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.8"))
+    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.34.3"))
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-grpc")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
