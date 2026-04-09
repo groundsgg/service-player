@@ -18,11 +18,13 @@ dependencies {
     implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.34.3"))
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-grpc")
+    implementation("io.quarkus:quarkus-scheduler")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
     implementation("io.quarkus:quarkus-scheduler")
     implementation("gg.grounds:library-grpc-contracts-player:0.2.0")
+    implementation("gg.grounds:library-grpc-contracts-permission:feat-perm-protos-SNAPSHOT")
 
     compileOnly("com.google.protobuf:protobuf-kotlin")
 
