@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/groundsgg/service-player/compare/v0.1.0...v0.2.0) (2026-04-19)
+
+
+### Features
+
+* add player hearbeat processing ([#21](https://github.com/groundsgg/service-player/issues/21)) ([0285e6c](https://github.com/groundsgg/service-player/commit/0285e6c44d2519941a6638ae651ef8ada40dc03c))
+
+
+### Bug Fixes
+
+* migrate gradle plugin to convention plugin ([#43](https://github.com/groundsgg/service-player/issues/43)) ([20f4b7a](https://github.com/groundsgg/service-player/commit/20f4b7a46dbf8676a26d3f1335179dc5f56713e7))
+
 ## [0.1.0](https://github.com/groundsgg/service-player/compare/v0.0.1...v0.1.0) (2026-01-18)
 
 
