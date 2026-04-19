@@ -1,7 +1,22 @@
+import org.gradle.api.tasks.compile.JavaCompile
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 plugins {
-    id("gg.grounds.root") version "0.1.1"
+    id("gg.grounds.base-conventions") version "0.5.1"
     id("io.quarkus") version "3.34.5"
 }
+
+kotlin { jvmToolchain(25) }
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+}
+
+tasks.withType<JavaCompile>().configureEach { options.release.set(25) }
+
+tasks.withType<KotlinCompile>().configureEach { compilerOptions.jvmTarget.set(JvmTarget.JVM_25) }
 
 repositories {
     mavenCentral()
