@@ -37,6 +37,7 @@ dependencies {
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
     implementation("io.quarkus:quarkus-scheduler")
+    implementation("io.quarkus:quarkus-opentelemetry")
     implementation("gg.grounds:library-grpc-contracts-player:0.2.0")
 
     // JWT validation for incoming gRPC calls (v2.2 Service Architecture).
