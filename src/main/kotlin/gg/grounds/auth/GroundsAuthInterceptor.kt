@@ -57,8 +57,8 @@ import org.jboss.logging.Logger
  * Set `grounds.auth.enabled=false` for local dev / tests where the SDK isn't attaching a token; the
  * interceptor then passes every call through unverified.
  *
- * JWKS fetch: the OVH-MKS `/openid/v1/jwks` endpoint needs cluster-CA trust + this pod's SA-Token as
- * a bearer + `Accept: application/jwk-set+json` — a plain HTTPS GET fails with PKIX / 403 / 406.
+ * JWKS fetch: the OVH-MKS `/openid/v1/jwks` endpoint needs cluster-CA trust + this pod's SA-Token
+ * as a bearer + `Accept: application/jwk-set+json` — a plain HTTPS GET fails with PKIX / 403 / 406.
  * In-cluster (the CA bundle is present) we use [K8sJwksRetriever]; locally we fall back to default
  * TLS trust. The sibling data services (service-config/social/leaderboard) still use the plain
  * JWKSourceBuilder and carry this same latent gap — to be back-ported.
