@@ -41,7 +41,7 @@ dependencies {
     implementation("gg.grounds:library-grpc-contracts-player:0.2.0")
 
     // JWT validation for incoming gRPC calls (v2.2 Service Architecture).
-    implementation("com.nimbusds:nimbus-jose-jwt:9.41.1")
+    implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")
 
     compileOnly("com.google.protobuf:protobuf-kotlin")
 
