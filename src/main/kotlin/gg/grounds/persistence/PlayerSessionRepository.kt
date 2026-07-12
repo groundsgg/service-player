@@ -32,6 +32,9 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                     statement.setObject(1, session.playerId)
                     statement.setTimestamp(2, Timestamp.from(session.connectedAt))
                     statement.setTimestamp(3, Timestamp.from(session.lastSeenAt))
+                    statement.setString(4, session.playerName)
+                    statement.setString(5, session.proxyId)
+                    statement.setString(6, session.serverName)
                     statement.executeUpdate() > 0
                 }
             }
@@ -62,6 +65,74 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 playerId,
             )
             null
+        }
+    }
+
+    fun findByName(name: String): PlayerSession? {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_BY_NAME).use { statement ->
+                    statement.setString(1, name)
+                    statement.executeQuery().use { resultSet ->
+                        if (resultSet.next()) mapSession(resultSet) else null
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session lookup by name failed (name=%s, reason=sql_error)",
+                name,
+            )
+            null
+        }
+    }
+
+    fun suggestNames(prefix: String, limit: Int): List<String> {
+        val lower = prefix.lowercase()
+        val upperBound = prefixUpperBound(lower) ?: return emptyList()
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SUGGEST_NAMES).use { statement ->
+                    statement.setString(1, lower)
+                    statement.setString(2, upperBound)
+                    statement.setString(3, escapeLikePattern(prefix))
+                    statement.setInt(4, limit)
+                    statement.executeQuery().use { resultSet ->
+                        val names = mutableListOf<String>()
+                        while (resultSet.next()) {
+                            names.add(resultSet.getString("player_name"))
+                        }
+                        names
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session name suggestion failed (prefix=%s, reason=sql_error)",
+                prefix,
+            )
+            emptyList()
+        }
+    }
+
+    fun updateServer(playerId: UUID, serverName: String): Boolean {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(UPDATE_SERVER).use { statement ->
+                    statement.setString(1, serverName)
+                    statement.setObject(2, playerId)
+                    statement.executeUpdate() > 0
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session server update failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            false
         }
     }
 
@@ -137,7 +208,14 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         val lastSeenAt =
             requireNotNull(resultSet.getTimestamp("last_seen_at")) { "last_seen_at is null" }
                 .toInstant()
-        return PlayerSession(playerId, connectedAt, lastSeenAt)
+        return PlayerSession(
+            playerId,
+            connectedAt,
+            lastSeenAt,
+            resultSet.getString("player_name"),
+            resultSet.getString("proxy_id"),
+            resultSet.getString("server_name"),
+        )
     }
 
     companion object {
@@ -145,14 +223,51 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
 
         private const val INSERT_SESSION =
             """
-            INSERT INTO player_sessions (player_id, connected_at, last_seen_at)
-            VALUES (?, ?, ?)
+            INSERT INTO player_sessions (player_id, connected_at, last_seen_at, player_name, proxy_id, server_name)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT (player_id) DO NOTHING
             """
         private const val SELECT_BY_PLAYER =
             """
-            SELECT player_id, connected_at, last_seen_at
+            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name
             FROM player_sessions
+            WHERE player_id = ?
+            """
+        private const val SELECT_BY_NAME =
+            """
+            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name
+            FROM player_sessions
+            WHERE lower(player_name) = lower(?)
+            """
+        /**
+         * The `~>=~` / `~<~` range is what carries the index, not the LIKE.
+         *
+         * `lower(player_name) LIKE $1 || '%'` alone plans as a **sequential scan** whenever
+         * Postgres picks a generic plan — which pgjdbc invites by switching to server-side prepared
+         * statements after five executions. Tab-complete is the hottest path there is (one call per
+         * keystroke, per player), so a scan of every session is exactly the thing to avoid.
+         * `starts_with()` plans the same way. Verified with `EXPLAIN` under `plan_cache_mode =
+         * force_generic_plan`.
+         *
+         * The pattern operators are the ones the `text_pattern_ops` index actually implements, so
+         * the range is index-backed under any plan; the LIKE stays as an exact re-check on the few
+         * rows the range returns (the range is byte-wise, so it can be marginally wider than the
+         * prefix).
+         */
+        private const val SUGGEST_NAMES =
+            """
+            SELECT player_name
+            FROM player_sessions
+            WHERE lower(player_name) ~>=~ ?
+              AND lower(player_name) ~<~ ?
+              AND lower(player_name) LIKE lower(?) || '%'
+            ORDER BY player_name
+            LIMIT ?
+            """
+        private const val UPDATE_SERVER =
+            """
+            UPDATE player_sessions
+            SET server_name = ?
             WHERE player_id = ?
             """
         private const val DELETE_BY_PLAYER =
@@ -171,5 +286,33 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             DELETE FROM player_sessions
             WHERE last_seen_at < ?
             """
+
+        /**
+         * Escapes LIKE metacharacters (`\`, `%`, `_`) in [prefix] so it is safe to use as a literal
+         * prefix in `LIKE lower(?) || '%'`. Without this, a player typing `%` or `_` into a
+         * name-suggestion search would trigger a full table scan instead of a prefix match.
+         */
+        internal fun escapeLikePattern(prefix: String): String {
+            return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        }
+
+        /**
+         * The exclusive upper end of the range covering everything that starts with [prefix] —
+         * "dah" → "dai" — so the index can answer a prefix search as a range scan.
+         *
+         * Null when there is no such bound (an empty prefix, or one ending in the highest possible
+         * character): the caller then has nothing to narrow the scan with and should not run the
+         * query at all.
+         */
+        internal fun prefixUpperBound(prefix: String): String? {
+            val chars = prefix.toCharArray()
+            for (i in chars.indices.reversed()) {
+                if (chars[i] < Char.MAX_VALUE) {
+                    chars[i] = chars[i] + 1
+                    return String(chars, 0, i + 1)
+                }
+            }
+            return null
+        }
     }
 }
