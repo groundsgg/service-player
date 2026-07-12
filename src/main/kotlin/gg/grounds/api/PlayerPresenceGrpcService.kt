@@ -1,6 +1,8 @@
 package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
+import gg.grounds.grpc.player.GetPlayerSessionReply
+import gg.grounds.grpc.player.GetPlayerSessionRequest
 import gg.grounds.grpc.player.LoginStatus
 import gg.grounds.grpc.player.PlayerHeartbeatBatchReply
 import gg.grounds.grpc.player.PlayerHeartbeatBatchRequest
@@ -9,6 +11,13 @@ import gg.grounds.grpc.player.PlayerLoginRequest
 import gg.grounds.grpc.player.PlayerLogoutReply
 import gg.grounds.grpc.player.PlayerLogoutRequest
 import gg.grounds.grpc.player.PlayerPresenceService
+import gg.grounds.grpc.player.PlayerSessionInfo
+import gg.grounds.grpc.player.ResolvePlayerNameReply
+import gg.grounds.grpc.player.ResolvePlayerNameRequest
+import gg.grounds.grpc.player.SuggestPlayerNamesReply
+import gg.grounds.grpc.player.SuggestPlayerNamesRequest
+import gg.grounds.grpc.player.UpdatePlayerServerReply
+import gg.grounds.grpc.player.UpdatePlayerServerRequest
 import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import io.quarkus.grpc.GrpcService
@@ -18,6 +27,7 @@ import jakarta.inject.Inject
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import kotlin.math.min
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
@@ -46,6 +56,26 @@ constructor(
         return Uni.createFrom().item { heartbeatService.handleHeartbeatBatch(request) }
     }
 
+    override fun getPlayerSession(request: GetPlayerSessionRequest): Uni<GetPlayerSessionReply> {
+        return Uni.createFrom().item { handleGetPlayerSession(request) }
+    }
+
+    override fun resolvePlayerName(request: ResolvePlayerNameRequest): Uni<ResolvePlayerNameReply> {
+        return Uni.createFrom().item { handleResolvePlayerName(request) }
+    }
+
+    override fun suggestPlayerNames(
+        request: SuggestPlayerNamesRequest
+    ): Uni<SuggestPlayerNamesReply> {
+        return Uni.createFrom().item { handleSuggestPlayerNames(request) }
+    }
+
+    override fun updatePlayerServer(
+        request: UpdatePlayerServerRequest
+    ): Uni<UpdatePlayerServerReply> {
+        return Uni.createFrom().item { handleUpdatePlayerServer(request) }
+    }
+
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
         val playerId =
             parsePlayerId(request.playerId)
@@ -55,7 +85,14 @@ constructor(
                     .build()
 
         val now = Instant.now()
-        val session = PlayerSession(playerId, now, now)
+        val session =
+            PlayerSession(
+                playerId,
+                now,
+                now,
+                blankToNull(request.playerName),
+                blankToNull(request.proxyId),
+            )
         val inserted = repository.insertSession(session)
         if (inserted) {
             LOG.infof("Player session created (playerId=%s, result=accepted)", playerId)
@@ -155,6 +192,75 @@ constructor(
         }
     }
 
+    private fun handleGetPlayerSession(request: GetPlayerSessionRequest): GetPlayerSessionReply {
+        val playerId =
+            parsePlayerId(request.playerId)
+                ?: return GetPlayerSessionReply.newBuilder().setFound(false).build()
+
+        val session =
+            repository.findByPlayerId(playerId)
+                ?: return GetPlayerSessionReply.newBuilder().setFound(false).build()
+
+        return GetPlayerSessionReply.newBuilder()
+            .setFound(true)
+            .setSession(toSessionInfo(session))
+            .build()
+    }
+
+    private fun handleResolvePlayerName(request: ResolvePlayerNameRequest): ResolvePlayerNameReply {
+        val name =
+            blankToNull(request.playerName)
+                ?: return ResolvePlayerNameReply.newBuilder().setFound(false).build()
+
+        val session =
+            repository.findByName(name)
+                ?: return ResolvePlayerNameReply.newBuilder().setFound(false).build()
+
+        return ResolvePlayerNameReply.newBuilder()
+            .setFound(true)
+            .setSession(toSessionInfo(session))
+            .build()
+    }
+
+    private fun handleSuggestPlayerNames(
+        request: SuggestPlayerNamesRequest
+    ): SuggestPlayerNamesReply {
+        val prefix =
+            blankToNull(request.prefix) ?: return SuggestPlayerNamesReply.newBuilder().build()
+
+        val names = repository.suggestNames(prefix, cappedSuggestLimit(request.limit))
+        return SuggestPlayerNamesReply.newBuilder().addAllPlayerNames(names).build()
+    }
+
+    private fun handleUpdatePlayerServer(
+        request: UpdatePlayerServerRequest
+    ): UpdatePlayerServerReply {
+        val playerId =
+            parsePlayerId(request.playerId)
+                ?: return UpdatePlayerServerReply.newBuilder().setUpdated(false).build()
+        val serverName =
+            blankToNull(request.serverName)
+                ?: return UpdatePlayerServerReply.newBuilder().setUpdated(false).build()
+
+        return UpdatePlayerServerReply.newBuilder()
+            .setUpdated(repository.updateServer(playerId, serverName))
+            .build()
+    }
+
+    private fun toSessionInfo(session: PlayerSession): PlayerSessionInfo {
+        return PlayerSessionInfo.newBuilder()
+            .setPlayerId(session.playerId.toString())
+            .setPlayerName(session.playerName ?: "")
+            .setProxyId(session.proxyId ?: "")
+            .setServerName(session.serverName ?: "")
+            .setConnectedAtMillis(session.connectedAt.toEpochMilli())
+            .build()
+    }
+
+    private fun blankToNull(value: String?): String? {
+        return value?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
     private fun parsePlayerId(value: String?): UUID? {
         return value
             ?.trim()
@@ -168,5 +274,12 @@ constructor(
 
     companion object {
         private val LOG = Logger.getLogger(PlayerPresenceGrpcService::class.java)
+
+        private const val MAX_SUGGEST_LIMIT = 25
+
+        /** Clamps an untrusted client-supplied limit; `<= 0` falls back to the maximum. */
+        internal fun cappedSuggestLimit(limit: Int): Int {
+            return if (limit <= 0) MAX_SUGGEST_LIMIT else min(limit, MAX_SUGGEST_LIMIT)
+        }
     }
 }
