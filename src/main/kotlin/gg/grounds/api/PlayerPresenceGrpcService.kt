@@ -56,20 +56,41 @@ constructor(
         return Uni.createFrom().item { heartbeatService.handleHeartbeatBatch(request) }
     }
 
+    /**
+     * Who and where a player is. A proxy calls this for someone who is not connected to it — it has
+     * no other way to know they exist.
+     *
+     * Absent player, unknown id, unparseable uuid: `found = false`, never an error status. The
+     * callers are Velocity command handlers; an exception here lands on the event loop.
+     */
     override fun getPlayerSession(request: GetPlayerSessionRequest): Uni<GetPlayerSessionReply> {
         return Uni.createFrom().item { handleGetPlayerSession(request) }
     }
 
+    /**
+     * Name to session — the lookup behind `/msg <name>` and `/party invite <name>` when the target
+     * is on another proxy. Case-insensitive: Minecraft names are unique, their casing is not.
+     */
     override fun resolvePlayerName(request: ResolvePlayerNameRequest): Uni<ResolvePlayerNameReply> {
         return Uni.createFrom().item { handleResolvePlayerName(request) }
     }
 
+    /**
+     * Tab-complete. A prefix search with a hard cap ([MAX_SUGGEST_LIMIT]) — deliberately NOT a list
+     * of everyone online: Velocity fires tab-complete on every keystroke, so at 10k players a
+     * roster would be a large response sent thousands of times a second, scanning the table each
+     * time. A blank prefix returns nothing rather than everything, for the same reason.
+     */
     override fun suggestPlayerNames(
         request: SuggestPlayerNamesRequest
     ): Uni<SuggestPlayerNamesReply> {
         return Uni.createFrom().item { handleSuggestPlayerNames(request) }
     }
 
+    /**
+     * Follows a player across backend servers, so a session says where they actually are — a party
+     * warp needs the target's server, and only the proxy holding them knows when it changes.
+     */
     override fun updatePlayerServer(
         request: UpdatePlayerServerRequest
     ): Uni<UpdatePlayerServerReply> {
