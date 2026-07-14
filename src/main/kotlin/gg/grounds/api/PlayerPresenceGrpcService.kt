@@ -1,6 +1,8 @@
 package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
+import gg.grounds.grpc.player.CountPlayersByServerReply
+import gg.grounds.grpc.player.CountPlayersByServerRequest
 import gg.grounds.grpc.player.GetPlayerSessionReply
 import gg.grounds.grpc.player.GetPlayerSessionRequest
 import gg.grounds.grpc.player.LoginStatus
@@ -14,11 +16,13 @@ import gg.grounds.grpc.player.PlayerPresenceService
 import gg.grounds.grpc.player.PlayerSessionInfo
 import gg.grounds.grpc.player.ResolvePlayerNameReply
 import gg.grounds.grpc.player.ResolvePlayerNameRequest
+import gg.grounds.grpc.player.ServerPlayerCount as GrpcServerPlayerCount
 import gg.grounds.grpc.player.SuggestPlayerNamesReply
 import gg.grounds.grpc.player.SuggestPlayerNamesRequest
 import gg.grounds.grpc.player.UpdatePlayerServerReply
 import gg.grounds.grpc.player.UpdatePlayerServerRequest
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import io.quarkus.grpc.GrpcService
 import io.smallrye.common.annotation.Blocking
@@ -95,6 +99,17 @@ constructor(
         request: UpdatePlayerServerRequest
     ): Uni<UpdatePlayerServerReply> {
         return Uni.createFrom().item { handleUpdatePlayerServer(request) }
+    }
+
+    /**
+     * Network-wide players per backend server. Velocity can only count the players connected to
+     * itself, so with more than one proxy in front of a server each of them sees only part of it —
+     * this reads the truth out of the session table instead.
+     */
+    override fun countPlayersByServer(
+        request: CountPlayersByServerRequest
+    ): Uni<CountPlayersByServerReply> {
+        return Uni.createFrom().item { handleCountPlayersByServer() }
     }
 
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
@@ -265,6 +280,31 @@ constructor(
 
         return UpdatePlayerServerReply.newBuilder()
             .setUpdated(repository.updateServer(playerId, serverName))
+            .build()
+    }
+
+    /**
+     * On a repository failure there is no error field on the wire reply to carry it — the same gap
+     * [handleGetPlayerSession] and [handleUpdatePlayerServer] already have. Falls back to a zero
+     * reply and relies on the repository's own error log for visibility.
+     */
+    private fun handleCountPlayersByServer(): CountPlayersByServerReply {
+        return when (val result = repository.countPlayersByServer()) {
+            is CountPlayersByServerResult.Counted ->
+                CountPlayersByServerReply.newBuilder()
+                    .addAllServers(result.servers.map(::toServerPlayerCount))
+                    .setTotal(result.total)
+                    .build()
+            CountPlayersByServerResult.Error -> CountPlayersByServerReply.newBuilder().build()
+        }
+    }
+
+    private fun toServerPlayerCount(
+        count: PlayerSessionRepository.ServerPlayerCount
+    ): GrpcServerPlayerCount {
+        return GrpcServerPlayerCount.newBuilder()
+            .setServerName(count.serverName)
+            .setPlayers(count.players)
             .build()
     }
 

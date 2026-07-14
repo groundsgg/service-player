@@ -1,6 +1,8 @@
 package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
+import gg.grounds.grpc.player.CountPlayersByServerReply
+import gg.grounds.grpc.player.CountPlayersByServerRequest
 import gg.grounds.grpc.player.LoginStatus
 import gg.grounds.grpc.player.PlayerLoginReply
 import gg.grounds.grpc.player.PlayerLoginRequest
@@ -8,7 +10,9 @@ import gg.grounds.grpc.player.PlayerLogoutReply
 import gg.grounds.grpc.player.PlayerLogoutRequest
 import gg.grounds.grpc.player.PlayerPresenceService
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
+import gg.grounds.persistence.PlayerSessionRepository.ServerPlayerCount
 import io.quarkus.grpc.GrpcClient
 import io.quarkus.test.InjectMock
 import io.quarkus.test.junit.QuarkusTest
@@ -212,5 +216,76 @@ class PlayerPresenceGrpcServiceTest {
         assertFalse(reply.removed)
         assertEquals("player session not found", reply.message)
         verify(repository).deleteSession(playerId)
+    }
+
+    @Test
+    fun countPlayersByServerCountsTwoPlayersOnTheSameServerAsTwo() {
+        whenever(repository.countPlayersByServer())
+            .thenReturn(
+                CountPlayersByServerResult.Counted(listOf(ServerPlayerCount("lobby", 2)), total = 2)
+            )
+
+        val reply: CountPlayersByServerReply =
+            service
+                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                .await()
+                .indefinitely()
+
+        assertEquals(1, reply.serversList.size)
+        assertEquals("lobby", reply.serversList[0].serverName)
+        assertEquals(2, reply.serversList[0].players)
+        assertEquals(2, reply.total)
+    }
+
+    @Test
+    fun countPlayersByServerGroupsDifferentServersSeparately() {
+        whenever(repository.countPlayersByServer())
+            .thenReturn(
+                CountPlayersByServerResult.Counted(
+                    listOf(ServerPlayerCount("lobby", 1), ServerPlayerCount("arena", 1)),
+                    total = 2,
+                )
+            )
+
+        val reply: CountPlayersByServerReply =
+            service
+                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                .await()
+                .indefinitely()
+
+        assertEquals(
+            setOf("lobby" to 1, "arena" to 1),
+            reply.serversList.map { it.serverName to it.players }.toSet(),
+        )
+        assertEquals(2, reply.total)
+    }
+
+    @Test
+    fun countPlayersByServerCountsPlayerWithNoServerInTotalOnly() {
+        whenever(repository.countPlayersByServer())
+            .thenReturn(CountPlayersByServerResult.Counted(emptyList(), total = 1))
+
+        val reply: CountPlayersByServerReply =
+            service
+                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                .await()
+                .indefinitely()
+
+        assertTrue(reply.serversList.isEmpty())
+        assertEquals(1, reply.total)
+    }
+
+    @Test
+    fun countPlayersByServerReturnsZeroWhenRepositoryFails() {
+        whenever(repository.countPlayersByServer()).thenReturn(CountPlayersByServerResult.Error)
+
+        val reply: CountPlayersByServerReply =
+            service
+                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                .await()
+                .indefinitely()
+
+        assertTrue(reply.serversList.isEmpty())
+        assertEquals(0, reply.total)
     }
 }

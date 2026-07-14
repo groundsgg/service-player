@@ -25,6 +25,15 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         data object Error : TouchSessionsResult
     }
 
+    data class ServerPlayerCount(val serverName: String, val players: Int)
+
+    sealed interface CountPlayersByServerResult {
+        data class Counted(val servers: List<ServerPlayerCount>, val total: Int) :
+            CountPlayersByServerResult
+
+        data object Error : CountPlayersByServerResult
+    }
+
     fun insertSession(session: PlayerSession): Boolean {
         return try {
             dataSource.connection.use { connection ->
@@ -197,6 +206,39 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    /**
+     * Per-server player counts plus the network total, in one snapshot. Velocity can only see the
+     * players connected to itself, so a network-wide count has to come from here instead.
+     */
+    fun countPlayersByServer(): CountPlayersByServerResult {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(COUNT_PLAYERS_BY_SERVER).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        val servers = mutableListOf<ServerPlayerCount>()
+                        var total = 0
+                        while (resultSet.next()) {
+                            if (resultSet.getInt("is_total") == 1) {
+                                total = resultSet.getInt("players")
+                            } else {
+                                val serverName = resultSet.getString("server_name")
+                                if (!serverName.isNullOrBlank()) {
+                                    servers.add(
+                                        ServerPlayerCount(serverName, resultSet.getInt("players"))
+                                    )
+                                }
+                            }
+                        }
+                        CountPlayersByServerResult.Counted(servers, total)
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(error, "Player session count by server failed (reason=sql_error)")
+            CountPlayersByServerResult.Error
+        }
+    }
+
     private fun mapSession(resultSet: ResultSet): PlayerSession {
         val playerId =
             requireNotNull(resultSet.getObject("player_id", UUID::class.java)) {
@@ -285,6 +327,23 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             """
             DELETE FROM player_sessions
             WHERE last_seen_at < ?
+            """
+        /**
+         * One statement, one snapshot — no race between a per-server query and a separate total
+         * query while sessions are being inserted/deleted concurrently.
+         *
+         * `GROUPING SETS ((server_name), ())` produces one row per distinct `server_name`
+         * (including a row for `NULL`, i.e. players who have not reached a backend yet) plus one
+         * extra row for the empty grouping set `()`, which aggregates over *all* rows regardless of
+         * server_name — that row is the network total. `GROUPING(server_name)` is 1 only on that
+         * rolled-up row, so it is how the total row is told apart from the real "no server yet"
+         * group, which would otherwise also show up with `server_name IS NULL`.
+         */
+        private const val COUNT_PLAYERS_BY_SERVER =
+            """
+            SELECT server_name, COUNT(*) AS players, GROUPING(server_name) AS is_total
+            FROM player_sessions
+            GROUP BY GROUPING SETS ((server_name), ())
             """
 
         /**
