@@ -36,7 +36,7 @@ repositories {
 configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
 
 dependencies {
-    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.36.2"))
+    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.37.2"))
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-grpc")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
