@@ -13,6 +13,8 @@ import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import gg.grounds.persistence.PlayerSessionRepository.ServerPlayerCount
+import io.grpc.Status
+import io.grpc.StatusRuntimeException
 import io.quarkus.grpc.GrpcClient
 import io.quarkus.test.InjectMock
 import io.quarkus.test.junit.QuarkusTest
@@ -21,6 +23,7 @@ import java.util.UUID
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -275,17 +278,22 @@ class PlayerPresenceGrpcServiceTest {
         assertEquals(1, reply.total)
     }
 
+    // An empty reply reads as "nobody is online anywhere" — a plausible number a caller will
+    // happily
+    // render. Answering that when the database is unreachable is how a proxy ends up printing a
+    // count it has no business being sure of. Fail instead, so the caller can say it could not ask.
     @Test
-    fun countPlayersByServerReturnsZeroWhenRepositoryFails() {
+    fun countPlayersByServerFailsWhenRepositoryFails() {
         whenever(repository.countPlayersByServer()).thenReturn(CountPlayersByServerResult.Error)
 
-        val reply: CountPlayersByServerReply =
-            service
-                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
-                .await()
-                .indefinitely()
+        val failure =
+            assertThrows(StatusRuntimeException::class.java) {
+                service
+                    .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                    .await()
+                    .indefinitely()
+            }
 
-        assertTrue(reply.serversList.isEmpty())
-        assertEquals(0, reply.total)
+        assertEquals(Status.Code.UNAVAILABLE, failure.status.code)
     }
 }

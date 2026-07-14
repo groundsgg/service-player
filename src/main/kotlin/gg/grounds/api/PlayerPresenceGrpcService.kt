@@ -24,6 +24,7 @@ import gg.grounds.grpc.player.UpdatePlayerServerRequest
 import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
+import io.grpc.Status
 import io.quarkus.grpc.GrpcService
 import io.smallrye.common.annotation.Blocking
 import io.smallrye.mutiny.Uni
@@ -284,9 +285,14 @@ constructor(
     }
 
     /**
-     * On a repository failure there is no error field on the wire reply to carry it — the same gap
-     * [handleGetPlayerSession] and [handleUpdatePlayerServer] already have. Falls back to a zero
-     * reply and relies on the repository's own error log for visibility.
+     * A repository failure fails the call, rather than answering zero.
+     *
+     * The reply has no error field, and the other RPCs collapse "failed" into their negative answer
+     * — `found=false`, `updated=false` — because for them the caller acts the same either way. A
+     * count is different: an empty reply reads as "nobody is online anywhere", which is a perfectly
+     * plausible number that callers will render. Handing that out when the database is unreachable
+     * is how a proxy came to print a player count it had no business being sure of. UNAVAILABLE
+     * lets the caller say it could not ask.
      */
     private fun handleCountPlayersByServer(): CountPlayersByServerReply {
         return when (val result = repository.countPlayersByServer()) {
@@ -295,7 +301,9 @@ constructor(
                     .addAllServers(result.servers.map(::toServerPlayerCount))
                     .setTotal(result.total)
                     .build()
-            CountPlayersByServerResult.Error -> CountPlayersByServerReply.newBuilder().build()
+            CountPlayersByServerResult.Error ->
+                throw Status.UNAVAILABLE.withDescription("player session count is unavailable")
+                    .asRuntimeException()
         }
     }
 
