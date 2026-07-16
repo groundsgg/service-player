@@ -1,6 +1,8 @@
 package gg.grounds.auth
 
 import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.jwk.JWKMatcher
+import com.nimbusds.jose.jwk.JWKSelector
 import com.nimbusds.jose.jwk.source.JWKSourceBuilder
 import com.nimbusds.jose.proc.JWSVerificationKeySelector
 import com.nimbusds.jose.proc.SecurityContext
@@ -110,6 +112,7 @@ constructor(
                 LOG.warnf("cluster CA %s not found — using default TLS trust (local/test)", caFile)
                 JWKSourceBuilder.create<SecurityContext>(URI.create(jwksUrl).toURL()).build()
             }
+        jwkSource.get(JWKSelector(JWKMatcher.Builder().build()), null)
         jwtProcessor =
             DefaultJWTProcessor<SecurityContext>().apply {
                 jwsKeySelector = JWSVerificationKeySelector(JWSAlgorithm.RS256, jwkSource)
