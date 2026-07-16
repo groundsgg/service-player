@@ -1,6 +1,7 @@
 package gg.grounds.auth
 
 import com.sun.net.httpserver.HttpServer
+import io.quarkus.runtime.Startup
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
@@ -9,6 +10,11 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class GroundsAuthInterceptorInitializationTest {
+    @Test
+    fun `interceptor is initialized during application startup`() {
+        assertTrue(GroundsAuthInterceptor::class.java.isAnnotationPresent(Startup::class.java))
+    }
+
     @Test
     fun `initialization fetches the JWKS before serving requests`() {
         val requests = AtomicInteger()
