@@ -19,6 +19,7 @@ import io.grpc.ServerCallHandler
 import io.grpc.ServerInterceptor
 import io.grpc.Status
 import io.quarkus.grpc.GlobalInterceptor
+import io.quarkus.runtime.Startup
 import jakarta.annotation.PostConstruct
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -65,6 +66,7 @@ import org.jboss.logging.Logger
  * TLS trust. The sibling data services (service-config/social/leaderboard) still use the plain
  * JWKSourceBuilder and carry this same latent gap — to be back-ported.
  */
+@Startup
 @ApplicationScoped
 @GlobalInterceptor
 class GroundsAuthInterceptor
