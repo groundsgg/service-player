@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/groundsgg/service-player/compare/v0.1.0...v0.2.0) (2026-07-16)
+
+
+### Features
+
+* add player hearbeat processing ([#21](https://github.com/groundsgg/service-player/issues/21)) ([0285e6c](https://github.com/groundsgg/service-player/commit/0285e6c44d2519941a6638ae651ef8ada40dc03c))
+* **player:** add durable player-name index + LookupPlayerNames RPC ([#78](https://github.com/groundsgg/service-player/issues/78)) ([b3c9b04](https://github.com/groundsgg/service-player/commit/b3c9b047552e1a83a16c27bbd2c75751e04fc36d))
+* **player:** server-side OpenTelemetry spans for incoming gRPC ([#59](https://github.com/groundsgg/service-player/issues/59)) ([ec98468](https://github.com/groundsgg/service-player/commit/ec984688dfa96d98d40a50f56db6d374aa2feed7))
+* **player:** validate incoming gRPC JWTs (v2.2 service auth) ([#58](https://github.com/groundsgg/service-player/issues/58)) ([815fb92](https://github.com/groundsgg/service-player/commit/815fb926b0fe46c79f9e160add7970c663dbd827))
+* **presence:** answer session lookups by name, id and prefix ([#75](https://github.com/groundsgg/service-player/issues/75)) ([5a1957d](https://github.com/groundsgg/service-player/commit/5a1957d546b1b4990252fc91f6bbd8319b499bb6))
+
+
+### Bug Fixes
+
+* **auth:** warm JWKS during startup ([#81](https://github.com/groundsgg/service-player/issues/81)) ([5f4a300](https://github.com/groundsgg/service-player/commit/5f4a300a439913a9485672be1e078214ba573ade))
+* migrate gradle plugin to convention plugin ([#43](https://github.com/groundsgg/service-player/issues/43)) ([20f4b7a](https://github.com/groundsgg/service-player/commit/20f4b7a46dbf8676a26d3f1335179dc5f56713e7))
+
 ## [0.1.0](https://github.com/groundsgg/service-player/compare/v0.0.1...v0.1.0) (2026-01-18)
 
 
