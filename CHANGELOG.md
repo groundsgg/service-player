@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/groundsgg/service-player/compare/v0.2.0...v0.2.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* **auth:** initialize JWT validation at startup ([#82](https://github.com/groundsgg/service-player/issues/82)) ([f467b33](https://github.com/groundsgg/service-player/commit/f467b33cb1d74230324bfc5baff7dbd5ac4c1348))
+
 ## [0.2.0](https://github.com/groundsgg/service-player/compare/v0.1.0...v0.2.0) (2026-07-16)
 
 
