@@ -3,8 +3,8 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
-    id("gg.grounds.base-conventions") version "0.5.1"
-    id("io.quarkus") version "3.36.2"
+    id("gg.grounds.base-conventions") version "0.8.0"
+    id("io.quarkus") version "3.37.3"
 }
 
 kotlin { jvmToolchain(25) }
@@ -29,8 +29,14 @@ repositories {
     }
 }
 
+// The contract is a moving SNAPSHOT, and Gradle caches changing modules for 24
+// hours by default. On a warm cache that means a contract merged and published
+// an hour ago is simply not seen: the build compiles against yesterday's proto
+// and a new RPC just silently doesn't exist. See service-match for the same fix.
+configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
+
 dependencies {
-    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.36.2"))
+    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.37.3"))
     implementation("io.quarkus:quarkus-arc")
     implementation("io.quarkus:quarkus-grpc")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
@@ -38,7 +44,7 @@ dependencies {
     implementation("io.quarkus:quarkus-kotlin")
     implementation("io.quarkus:quarkus-scheduler")
     implementation("io.quarkus:quarkus-opentelemetry")
-    implementation("gg.grounds:library-grpc-contracts-player:0.4.0")
+    implementation("gg.grounds:library-grpc-contracts-player:main-SNAPSHOT")
 
     // JWT validation for incoming gRPC calls (v2.2 Service Architecture).
     implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")

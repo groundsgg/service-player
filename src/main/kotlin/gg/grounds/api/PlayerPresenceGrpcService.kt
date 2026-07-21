@@ -6,6 +6,8 @@ import gg.grounds.grpc.player.CountPlayersByServerRequest
 import gg.grounds.grpc.player.GetPlayerSessionReply
 import gg.grounds.grpc.player.GetPlayerSessionRequest
 import gg.grounds.grpc.player.LoginStatus
+import gg.grounds.grpc.player.LookupPlayerNamesReply
+import gg.grounds.grpc.player.LookupPlayerNamesRequest
 import gg.grounds.grpc.player.PlayerHeartbeatBatchReply
 import gg.grounds.grpc.player.PlayerHeartbeatBatchRequest
 import gg.grounds.grpc.player.PlayerLoginReply
@@ -21,6 +23,7 @@ import gg.grounds.grpc.player.SuggestPlayerNamesReply
 import gg.grounds.grpc.player.SuggestPlayerNamesRequest
 import gg.grounds.grpc.player.UpdatePlayerServerReply
 import gg.grounds.grpc.player.UpdatePlayerServerRequest
+import gg.grounds.persistence.PlayerNameRepository
 import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
@@ -42,6 +45,7 @@ class PlayerPresenceGrpcService
 @Inject
 constructor(
     private val repository: PlayerSessionRepository,
+    private val nameRepository: PlayerNameRepository,
     private val heartbeatService: PlayerHeartbeatService,
 ) : PlayerPresenceService {
     @ConfigProperty(name = "grounds.player.sessions.ttl", defaultValue = "90s")
@@ -103,6 +107,15 @@ constructor(
     }
 
     /**
+     * Turns ids back into names for players who are NOT online — the durable index behind a
+     * leaderboard, match history, or anything else that outlives a session. Ids never seen are
+     * simply absent from the reply map, not mapped to a placeholder.
+     */
+    override fun lookupPlayerNames(request: LookupPlayerNamesRequest): Uni<LookupPlayerNamesReply> {
+        return Uni.createFrom().item { handleLookupPlayerNames(request) }
+    }
+
+    /**
      * Network-wide players per backend server. Velocity can only count the players connected to
      * itself, so with more than one proxy in front of a server each of them sees only part of it —
      * this reads the truth out of the session table instead.
@@ -122,14 +135,15 @@ constructor(
                     .build()
 
         val now = Instant.now()
-        val session =
-            PlayerSession(
-                playerId,
-                now,
-                now,
-                blankToNull(request.playerName),
-                blankToNull(request.proxyId),
-            )
+        val playerName = blankToNull(request.playerName)
+        // Written regardless of what happens below: a login rejected as already-online still
+        // came with a real id + name from the proxy, and that is all the durable index needs.
+        // Best-effort — a failure here must not block the session logic that follows.
+        if (playerName != null) {
+            nameRepository.upsertName(playerId, playerName, now)
+        }
+
+        val session = PlayerSession(playerId, now, now, playerName, blankToNull(request.proxyId))
         val inserted = repository.insertSession(session)
         if (inserted) {
             LOG.infof("Player session created (playerId=%s, result=accepted)", playerId)
@@ -316,6 +330,23 @@ constructor(
             .build()
     }
 
+    private fun handleLookupPlayerNames(request: LookupPlayerNamesRequest): LookupPlayerNamesReply {
+        val playerIds =
+            request.playerIdsList
+                .asSequence()
+                .take(MAX_LOOKUP_IDS)
+                .mapNotNull(::parsePlayerId)
+                .toSet()
+        if (playerIds.isEmpty()) {
+            return LookupPlayerNamesReply.newBuilder().build()
+        }
+
+        val names = nameRepository.findNames(playerIds)
+        return LookupPlayerNamesReply.newBuilder()
+            .putAllNames(names.mapKeys { (playerId, _) -> playerId.toString() })
+            .build()
+    }
+
     private fun toSessionInfo(session: PlayerSession): PlayerSessionInfo {
         return PlayerSessionInfo.newBuilder()
             .setPlayerId(session.playerId.toString())
@@ -345,6 +376,12 @@ constructor(
         private val LOG = Logger.getLogger(PlayerPresenceGrpcService::class.java)
 
         private const val MAX_SUGGEST_LIMIT = 25
+
+        /**
+         * A leaderboard page or a match's roster is at most a few dozen names; 100 is generous
+         * headroom for that without letting one call ask for an unbounded id list.
+         */
+        private const val MAX_LOOKUP_IDS = 100
 
         /** Clamps an untrusted client-supplied limit; `<= 0` falls back to the maximum. */
         internal fun cappedSuggestLimit(limit: Int): Int {

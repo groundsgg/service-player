@@ -1,6 +1,8 @@
 package gg.grounds.auth
 
 import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.jwk.JWKMatcher
+import com.nimbusds.jose.jwk.JWKSelector
 import com.nimbusds.jose.jwk.source.JWKSourceBuilder
 import com.nimbusds.jose.proc.JWSVerificationKeySelector
 import com.nimbusds.jose.proc.SecurityContext
@@ -17,6 +19,7 @@ import io.grpc.ServerCallHandler
 import io.grpc.ServerInterceptor
 import io.grpc.Status
 import io.quarkus.grpc.GlobalInterceptor
+import io.quarkus.runtime.Startup
 import jakarta.annotation.PostConstruct
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -63,6 +66,7 @@ import org.jboss.logging.Logger
  * TLS trust. The sibling data services (service-config/social/leaderboard) still use the plain
  * JWKSourceBuilder and carry this same latent gap — to be back-ported.
  */
+@Startup
 @ApplicationScoped
 @GlobalInterceptor
 class GroundsAuthInterceptor
@@ -110,6 +114,7 @@ constructor(
                 LOG.warnf("cluster CA %s not found — using default TLS trust (local/test)", caFile)
                 JWKSourceBuilder.create<SecurityContext>(URI.create(jwksUrl).toURL()).build()
             }
+        jwkSource.get(JWKSelector(JWKMatcher.Builder().build()), null)
         jwtProcessor =
             DefaultJWTProcessor<SecurityContext>().apply {
                 jwsKeySelector = JWSVerificationKeySelector(JWSAlgorithm.RS256, jwkSource)
