@@ -1,6 +1,8 @@
 package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
+import gg.grounds.grpc.player.CountPlayersByServerReply
+import gg.grounds.grpc.player.CountPlayersByServerRequest
 import gg.grounds.grpc.player.LoginStatus
 import gg.grounds.grpc.player.LookupPlayerNamesRequest
 import gg.grounds.grpc.player.PlayerLoginReply
@@ -10,7 +12,11 @@ import gg.grounds.grpc.player.PlayerLogoutRequest
 import gg.grounds.grpc.player.PlayerPresenceService
 import gg.grounds.persistence.PlayerNameRepository
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
+import gg.grounds.persistence.PlayerSessionRepository.ServerPlayerCount
+import io.grpc.Status
+import io.grpc.StatusRuntimeException
 import io.quarkus.grpc.GrpcClient
 import io.quarkus.test.InjectMock
 import io.quarkus.test.junit.QuarkusTest
@@ -19,6 +25,7 @@ import java.util.UUID
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -307,5 +314,81 @@ class PlayerPresenceGrpcServiceTest {
         val idsCaptor = argumentCaptor<Collection<UUID>>()
         verify(nameRepository).findNames(idsCaptor.capture())
         assertEquals(100, idsCaptor.firstValue.size)
+    }
+
+    @Test
+    fun countPlayersByServerCountsTwoPlayersOnTheSameServerAsTwo() {
+        whenever(repository.countPlayersByServer())
+            .thenReturn(
+                CountPlayersByServerResult.Counted(listOf(ServerPlayerCount("lobby", 2)), total = 2)
+            )
+
+        val reply: CountPlayersByServerReply =
+            service
+                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                .await()
+                .indefinitely()
+
+        assertEquals(1, reply.serversList.size)
+        assertEquals("lobby", reply.serversList[0].serverName)
+        assertEquals(2, reply.serversList[0].players)
+        assertEquals(2, reply.total)
+    }
+
+    @Test
+    fun countPlayersByServerGroupsDifferentServersSeparately() {
+        whenever(repository.countPlayersByServer())
+            .thenReturn(
+                CountPlayersByServerResult.Counted(
+                    listOf(ServerPlayerCount("lobby", 1), ServerPlayerCount("arena", 1)),
+                    total = 2,
+                )
+            )
+
+        val reply: CountPlayersByServerReply =
+            service
+                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                .await()
+                .indefinitely()
+
+        assertEquals(
+            setOf("lobby" to 1, "arena" to 1),
+            reply.serversList.map { it.serverName to it.players }.toSet(),
+        )
+        assertEquals(2, reply.total)
+    }
+
+    @Test
+    fun countPlayersByServerCountsPlayerWithNoServerInTotalOnly() {
+        whenever(repository.countPlayersByServer())
+            .thenReturn(CountPlayersByServerResult.Counted(emptyList(), total = 1))
+
+        val reply: CountPlayersByServerReply =
+            service
+                .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                .await()
+                .indefinitely()
+
+        assertTrue(reply.serversList.isEmpty())
+        assertEquals(1, reply.total)
+    }
+
+    // An empty reply reads as "nobody is online anywhere" — a plausible number a caller will
+    // happily
+    // render. Answering that when the database is unreachable is how a proxy ends up printing a
+    // count it has no business being sure of. Fail instead, so the caller can say it could not ask.
+    @Test
+    fun countPlayersByServerFailsWhenRepositoryFails() {
+        whenever(repository.countPlayersByServer()).thenReturn(CountPlayersByServerResult.Error)
+
+        val failure =
+            assertThrows(StatusRuntimeException::class.java) {
+                service
+                    .countPlayersByServer(CountPlayersByServerRequest.newBuilder().build())
+                    .await()
+                    .indefinitely()
+            }
+
+        assertEquals(Status.Code.UNAVAILABLE, failure.status.code)
     }
 }

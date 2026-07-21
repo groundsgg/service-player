@@ -1,6 +1,8 @@
 package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
+import gg.grounds.grpc.player.CountPlayersByServerReply
+import gg.grounds.grpc.player.CountPlayersByServerRequest
 import gg.grounds.grpc.player.GetPlayerSessionReply
 import gg.grounds.grpc.player.GetPlayerSessionRequest
 import gg.grounds.grpc.player.LoginStatus
@@ -16,13 +18,16 @@ import gg.grounds.grpc.player.PlayerPresenceService
 import gg.grounds.grpc.player.PlayerSessionInfo
 import gg.grounds.grpc.player.ResolvePlayerNameReply
 import gg.grounds.grpc.player.ResolvePlayerNameRequest
+import gg.grounds.grpc.player.ServerPlayerCount as GrpcServerPlayerCount
 import gg.grounds.grpc.player.SuggestPlayerNamesReply
 import gg.grounds.grpc.player.SuggestPlayerNamesRequest
 import gg.grounds.grpc.player.UpdatePlayerServerReply
 import gg.grounds.grpc.player.UpdatePlayerServerRequest
 import gg.grounds.persistence.PlayerNameRepository
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
+import io.grpc.Status
 import io.quarkus.grpc.GrpcService
 import io.smallrye.common.annotation.Blocking
 import io.smallrye.mutiny.Uni
@@ -108,6 +113,17 @@ constructor(
      */
     override fun lookupPlayerNames(request: LookupPlayerNamesRequest): Uni<LookupPlayerNamesReply> {
         return Uni.createFrom().item { handleLookupPlayerNames(request) }
+    }
+
+    /**
+     * Network-wide players per backend server. Velocity can only count the players connected to
+     * itself, so with more than one proxy in front of a server each of them sees only part of it —
+     * this reads the truth out of the session table instead.
+     */
+    override fun countPlayersByServer(
+        request: CountPlayersByServerRequest
+    ): Uni<CountPlayersByServerReply> {
+        return Uni.createFrom().item { handleCountPlayersByServer() }
     }
 
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
@@ -279,6 +295,38 @@ constructor(
 
         return UpdatePlayerServerReply.newBuilder()
             .setUpdated(repository.updateServer(playerId, serverName))
+            .build()
+    }
+
+    /**
+     * A repository failure fails the call, rather than answering zero.
+     *
+     * The reply has no error field, and the other RPCs collapse "failed" into their negative answer
+     * — `found=false`, `updated=false` — because for them the caller acts the same either way. A
+     * count is different: an empty reply reads as "nobody is online anywhere", which is a perfectly
+     * plausible number that callers will render. Handing that out when the database is unreachable
+     * is how a proxy came to print a player count it had no business being sure of. UNAVAILABLE
+     * lets the caller say it could not ask.
+     */
+    private fun handleCountPlayersByServer(): CountPlayersByServerReply {
+        return when (val result = repository.countPlayersByServer()) {
+            is CountPlayersByServerResult.Counted ->
+                CountPlayersByServerReply.newBuilder()
+                    .addAllServers(result.servers.map(::toServerPlayerCount))
+                    .setTotal(result.total)
+                    .build()
+            CountPlayersByServerResult.Error ->
+                throw Status.UNAVAILABLE.withDescription("player session count is unavailable")
+                    .asRuntimeException()
+        }
+    }
+
+    private fun toServerPlayerCount(
+        count: PlayerSessionRepository.ServerPlayerCount
+    ): GrpcServerPlayerCount {
+        return GrpcServerPlayerCount.newBuilder()
+            .setServerName(count.serverName)
+            .setPlayers(count.players)
             .build()
     }
 
