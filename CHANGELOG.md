@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/groundsgg/service-player/compare/v0.2.1...v0.3.0) (2026-07-24)
+
+
+### Features
+
+* **grpc:** add CountPlayersByServer RPC for network-wide counts ([#77](https://github.com/groundsgg/service-player/issues/77)) ([2272ca0](https://github.com/groundsgg/service-player/commit/2272ca0cb20291ee16948370a0563c595733fed3))
+* **persistence:** declare which reads may be stale ([#87](https://github.com/groundsgg/service-player/issues/87)) ([4027e9f](https://github.com/groundsgg/service-player/commit/4027e9fa55f8706fd06035d9835171229a980d9b))
+
 ## [0.2.1](https://github.com/groundsgg/service-player/compare/v0.2.0...v0.2.1) (2026-07-16)
 
 
