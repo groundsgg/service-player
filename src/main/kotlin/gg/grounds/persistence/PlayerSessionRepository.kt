@@ -1,8 +1,8 @@
 package gg.grounds.persistence
 
-import gg.grounds.domain.PlayerSession
 import gg.grounds.data.Cached
 import gg.grounds.data.Fresh
+import gg.grounds.domain.PlayerSession
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.ResultSet
@@ -109,8 +109,8 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
      * class is presence, where a stale answer would route a player to a server they already left.
      *
      * Ten seconds, not longer: the list is derived from who is online, and a player who just joined
-     * being unsuggestable for a minute is noticeable. Bounded at 2000 entries because the key is the
-     * prefix — cardinality is whatever players type, not whatever exists.
+     * being unsuggestable for a minute is noticeable. Bounded at 2000 entries because the key is
+     * the prefix — cardinality is whatever players type, not whatever exists.
      */
     @Cached(ttlSeconds = 10, maxEntries = 2_000)
     fun suggestNames(prefix: String, limit: Int): List<String> {
