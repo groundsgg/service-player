@@ -1,5 +1,6 @@
 package gg.grounds.persistence
 
+import gg.grounds.data.Fresh
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.SQLException
@@ -18,6 +19,7 @@ import org.jboss.logging.Logger
 @ApplicationScoped
 class PlayerNameRepository @Inject constructor(private val dataSource: DataSource) {
     /** Idempotent: a repeat login just refreshes the name + last-seen timestamp. */
+    @Fresh
     fun upsertName(playerId: UUID, playerName: String, seenAt: Instant): Boolean {
         return try {
             dataSource.connection.use { connection ->
@@ -38,7 +40,19 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
         }
     }
 
-    /** One query for every id — a `WHERE player_id = ANY(?)`, not N round-trips. */
+    /**
+     * One query for every id — a `WHERE player_id = ANY(?)`, not N round-trips.
+     *
+     * Deliberately NOT `@Cached`, even though a durable name index is the textbook case for it. The
+     * cache key is the argument, and the argument here is a collection: two callers asking for the
+     * same three players in a different order are two entries, and a caller asking for four players
+     * shares nothing with one asking for three of them. The hit rate would be poor and the memory
+     * spent on it invisible.
+     *
+     * Caching this properly means caching per id and assembling the batch, which changes the shape
+     * of the method rather than adding an annotation to it. Left alone until someone measures that
+     * it matters.
+     */
     fun findNames(playerIds: Collection<UUID>): Map<UUID, String> {
         if (playerIds.isEmpty()) {
             return emptyMap()

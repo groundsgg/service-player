@@ -45,6 +45,10 @@ dependencies {
     implementation("io.quarkus:quarkus-scheduler")
     implementation("io.quarkus:quarkus-opentelemetry")
     implementation("gg.grounds:library-grpc-contracts-player:main-SNAPSHOT")
+    // Access classes for reads against the EU-resident database. Pinned to a
+    // release rather than a SNAPSHOT: what may be served stale is a decision,
+    // and a decision should not change because someone merged to main.
+    implementation("gg.grounds:library-data-access:0.2.0")
 
     // JWT validation for incoming gRPC calls (v2.2 Service Architecture).
     implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")
