@@ -1,6 +1,8 @@
 package gg.grounds.api
 
 import gg.grounds.domain.PlayerSession
+import gg.grounds.grpc.player.CountPlayersByProxyReply
+import gg.grounds.grpc.player.CountPlayersByProxyRequest
 import gg.grounds.grpc.player.CountPlayersByServerReply
 import gg.grounds.grpc.player.CountPlayersByServerRequest
 import gg.grounds.grpc.player.GetPlayerSessionReply
@@ -16,6 +18,7 @@ import gg.grounds.grpc.player.PlayerLogoutReply
 import gg.grounds.grpc.player.PlayerLogoutRequest
 import gg.grounds.grpc.player.PlayerPresenceService
 import gg.grounds.grpc.player.PlayerSessionInfo
+import gg.grounds.grpc.player.ProxyPlayerCount as GrpcProxyPlayerCount
 import gg.grounds.grpc.player.ResolvePlayerNameReply
 import gg.grounds.grpc.player.ResolvePlayerNameRequest
 import gg.grounds.grpc.player.ServerPlayerCount as GrpcServerPlayerCount
@@ -25,6 +28,7 @@ import gg.grounds.grpc.player.UpdatePlayerServerReply
 import gg.grounds.grpc.player.UpdatePlayerServerRequest
 import gg.grounds.persistence.PlayerNameRepository
 import gg.grounds.persistence.PlayerSessionRepository
+import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByProxyResult
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import io.grpc.Status
@@ -126,6 +130,41 @@ constructor(
         return Uni.createFrom().item { handleCountPlayersByServer() }
     }
 
+    /**
+     * How the network is spread across proxies, and where those proxies are.
+     *
+     * The sibling call groups the same players by backend server. Neither caller wants both:
+     * /agones asks which servers are busy, /online asks which proxies and regions hold people.
+     */
+    override fun countPlayersByProxy(
+        request: CountPlayersByProxyRequest
+    ): Uni<CountPlayersByProxyReply> {
+        return Uni.createFrom().item { handleCountPlayersByProxy() }
+    }
+
+    private fun handleCountPlayersByProxy(): CountPlayersByProxyReply {
+        return when (val result = repository.countPlayersByProxy()) {
+            is CountPlayersByProxyResult.Counted ->
+                CountPlayersByProxyReply.newBuilder()
+                    .addAllProxies(result.proxies.map(::toProxyPlayerCount))
+                    .setTotal(result.total)
+                    .build()
+            CountPlayersByProxyResult.Error ->
+                throw Status.UNAVAILABLE.withDescription("player session count is unavailable")
+                    .asRuntimeException()
+        }
+    }
+
+    private fun toProxyPlayerCount(
+        count: PlayerSessionRepository.ProxyPlayerCount
+    ): GrpcProxyPlayerCount {
+        return GrpcProxyPlayerCount.newBuilder()
+            .setProxyId(count.proxyId)
+            .setRegion(count.region ?: "")
+            .setPlayers(count.players)
+            .build()
+    }
+
     private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
         val playerId =
             parsePlayerId(request.playerId)
@@ -143,7 +182,15 @@ constructor(
             nameRepository.upsertName(playerId, playerName, now)
         }
 
-        val session = PlayerSession(playerId, now, now, playerName, blankToNull(request.proxyId))
+        val session =
+            PlayerSession(
+                playerId,
+                now,
+                now,
+                playerName,
+                blankToNull(request.proxyId),
+                region = blankToNull(request.region),
+            )
         val inserted = repository.insertSession(session)
         if (inserted) {
             LOG.infof("Player session created (playerId=%s, result=accepted)", playerId)
@@ -354,6 +401,7 @@ constructor(
             .setProxyId(session.proxyId ?: "")
             .setServerName(session.serverName ?: "")
             .setConnectedAtMillis(session.connectedAt.toEpochMilli())
+            .setRegion(session.region ?: "")
             .build()
     }
 
