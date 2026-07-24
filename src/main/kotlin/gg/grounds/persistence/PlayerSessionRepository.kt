@@ -1,6 +1,8 @@
 package gg.grounds.persistence
 
 import gg.grounds.domain.PlayerSession
+import gg.grounds.data.Cached
+import gg.grounds.data.Fresh
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.ResultSet
@@ -34,6 +36,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         data object Error : CountPlayersByServerResult
     }
 
+    @Fresh
     fun insertSession(session: PlayerSession): Boolean {
         return try {
             dataSource.connection.use { connection ->
@@ -57,6 +60,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    @Fresh
     fun findByPlayerId(playerId: UUID): PlayerSession? {
         return try {
             dataSource.connection.use { connection ->
@@ -77,6 +81,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    @Fresh
     fun findByName(name: String): PlayerSession? {
         return try {
             dataSource.connection.use { connection ->
@@ -97,6 +102,17 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    /**
+     * The one read here that may be stale. Tab-complete fires once per keystroke per player, so it
+     * is the hottest query this service has — and a suggestion list that is ten seconds old shows a
+     * name that just went offline, which is cosmetic rather than wrong. Everything else in this
+     * class is presence, where a stale answer would route a player to a server they already left.
+     *
+     * Ten seconds, not longer: the list is derived from who is online, and a player who just joined
+     * being unsuggestable for a minute is noticeable. Bounded at 2000 entries because the key is the
+     * prefix — cardinality is whatever players type, not whatever exists.
+     */
+    @Cached(ttlSeconds = 10, maxEntries = 2_000)
     fun suggestNames(prefix: String, limit: Int): List<String> {
         val lower = prefix.lowercase()
         val upperBound = prefixUpperBound(lower) ?: return emptyList()
@@ -126,6 +142,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    @Fresh
     fun updateServer(playerId: UUID, serverName: String): Boolean {
         return try {
             dataSource.connection.use { connection ->
@@ -145,6 +162,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    @Fresh
     fun deleteSession(playerId: UUID): DeleteSessionResult {
         return try {
             dataSource.connection.use { connection ->
@@ -164,6 +182,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    @Fresh
     fun touchSessions(playerIds: Collection<UUID>, lastSeenAt: Instant): TouchSessionsResult {
         if (playerIds.isEmpty()) {
             return TouchSessionsResult.Updated(0)
@@ -188,6 +207,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    @Fresh
     fun deleteStaleSessions(cutoff: Instant): Int {
         return try {
             dataSource.connection.use { connection ->
@@ -210,6 +230,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
      * Per-server player counts plus the network total, in one snapshot. Velocity can only see the
      * players connected to itself, so a network-wide count has to come from here instead.
      */
+    @Fresh
     fun countPlayersByServer(): CountPlayersByServerResult {
         return try {
             dataSource.connection.use { connection ->
