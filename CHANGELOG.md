@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/groundsgg/service-player/compare/v0.3.0...v0.4.0) (2026-07-24)
+
+
+### Features
+
+* **presence:** record a player's region and count players by proxy ([#88](https://github.com/groundsgg/service-player/issues/88)) ([91a39fb](https://github.com/groundsgg/service-player/commit/91a39fbad448fa9c2e0c76f3000799af68b7ff23))
+
 ## [0.3.0](https://github.com/groundsgg/service-player/compare/v0.2.1...v0.3.0) (2026-07-24)
 
 
