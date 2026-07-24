@@ -29,11 +29,20 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
 
     data class ServerPlayerCount(val serverName: String, val players: Int)
 
+    data class ProxyPlayerCount(val proxyId: String, val region: String?, val players: Int)
+
     sealed interface CountPlayersByServerResult {
         data class Counted(val servers: List<ServerPlayerCount>, val total: Int) :
             CountPlayersByServerResult
 
         data object Error : CountPlayersByServerResult
+    }
+
+    sealed interface CountPlayersByProxyResult {
+        data class Counted(val proxies: List<ProxyPlayerCount>, val total: Int) :
+            CountPlayersByProxyResult
+
+        data object Error : CountPlayersByProxyResult
     }
 
     @Fresh
@@ -47,6 +56,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                     statement.setString(4, session.playerName)
                     statement.setString(5, session.proxyId)
                     statement.setString(6, session.serverName)
+                    statement.setString(7, session.region)
                     statement.executeUpdate() > 0
                 }
             }
@@ -260,6 +270,47 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    /**
+     * Per-proxy player counts plus the network total, with each proxy's region.
+     *
+     * Unlike the per-server count, every session belongs to exactly one proxy — so the total equals
+     * the sum of the rows rather than exceeding it. A proxy holding nobody is absent rather than
+     * zero: the caller cannot enumerate proxies, and an idle one is not interesting.
+     */
+    @Fresh
+    fun countPlayersByProxy(): CountPlayersByProxyResult {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(COUNT_PLAYERS_BY_PROXY).use { statement ->
+                    statement.executeQuery().use { resultSet ->
+                        val proxies = mutableListOf<ProxyPlayerCount>()
+                        var total = 0
+                        while (resultSet.next()) {
+                            if (resultSet.getInt("is_total") != 0) {
+                                total = resultSet.getInt("players")
+                            } else {
+                                val proxyId = resultSet.getString("proxy_id")
+                                if (!proxyId.isNullOrBlank()) {
+                                    proxies.add(
+                                        ProxyPlayerCount(
+                                            proxyId,
+                                            resultSet.getString("region"),
+                                            resultSet.getInt("players"),
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                        CountPlayersByProxyResult.Counted(proxies, total)
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(error, "Player session count by proxy failed (reason=sql_error)")
+            CountPlayersByProxyResult.Error
+        }
+    }
+
     private fun mapSession(resultSet: ResultSet): PlayerSession {
         val playerId =
             requireNotNull(resultSet.getObject("player_id", UUID::class.java)) {
@@ -278,6 +329,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             resultSet.getString("player_name"),
             resultSet.getString("proxy_id"),
             resultSet.getString("server_name"),
+            resultSet.getString("region"),
         )
     }
 
@@ -286,19 +338,19 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
 
         private const val INSERT_SESSION =
             """
-            INSERT INTO player_sessions (player_id, connected_at, last_seen_at, player_name, proxy_id, server_name)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO player_sessions (player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (player_id) DO NOTHING
             """
         private const val SELECT_BY_PLAYER =
             """
-            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name
+            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region
             FROM player_sessions
             WHERE player_id = ?
             """
         private const val SELECT_BY_NAME =
             """
-            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name
+            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region
             FROM player_sessions
             WHERE lower(player_name) = lower(?)
             """
@@ -349,6 +401,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             DELETE FROM player_sessions
             WHERE last_seen_at < ?
             """
+
         /**
          * One statement, one snapshot — no race between a per-server query and a separate total
          * query while sessions are being inserted/deleted concurrently.
@@ -360,6 +413,22 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
          * rolled-up row, so it is how the total row is told apart from the real "no server yet"
          * group, which would otherwise also show up with `server_name IS NULL`.
          */
+        /**
+         * The same GROUPING SETS shape as COUNT_PLAYERS_BY_SERVER, grouped on the pair `(proxy_id,
+         * region)` — a proxy has exactly one region, so grouping by both adds the region to each
+         * row without splitting any group.
+         *
+         * `GROUPING(proxy_id, region)` is a bitmask over both columns, so the rolled-up total row
+         * is 3 rather than 1. Comparing against 0 for the real groups is the robust test either
+         * way.
+         */
+        private const val COUNT_PLAYERS_BY_PROXY =
+            """
+            SELECT proxy_id, region, COUNT(*) AS players, GROUPING(proxy_id, region) AS is_total
+            FROM player_sessions
+            GROUP BY GROUPING SETS ((proxy_id, region), ())
+            """
+
         private const val COUNT_PLAYERS_BY_SERVER =
             """
             SELECT server_name, COUNT(*) AS players, GROUPING(server_name) AS is_total
