@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/groundsgg/service-player/compare/v0.4.0...v0.5.0) (2026-07-24)
+
+
+### Features
+
+* **presence:** broadcast the network player count every five seconds ([#90](https://github.com/groundsgg/service-player/issues/90)) ([fab6923](https://github.com/groundsgg/service-player/commit/fab6923b5028498f6dc17d1f912e168ba3c4730c))
+
 ## [0.4.0](https://github.com/groundsgg/service-player/compare/v0.3.0...v0.4.0) (2026-07-24)
 
 
