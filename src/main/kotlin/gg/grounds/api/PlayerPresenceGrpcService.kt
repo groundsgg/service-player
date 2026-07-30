@@ -5,6 +5,8 @@ import gg.grounds.grpc.player.CountPlayersByProxyReply
 import gg.grounds.grpc.player.CountPlayersByProxyRequest
 import gg.grounds.grpc.player.CountPlayersByServerReply
 import gg.grounds.grpc.player.CountPlayersByServerRequest
+import gg.grounds.grpc.player.GetPlayerLocaleReply
+import gg.grounds.grpc.player.GetPlayerLocaleRequest
 import gg.grounds.grpc.player.GetPlayerSessionReply
 import gg.grounds.grpc.player.GetPlayerSessionRequest
 import gg.grounds.grpc.player.LoginStatus
@@ -22,6 +24,8 @@ import gg.grounds.grpc.player.ProxyPlayerCount as GrpcProxyPlayerCount
 import gg.grounds.grpc.player.ResolvePlayerNameReply
 import gg.grounds.grpc.player.ResolvePlayerNameRequest
 import gg.grounds.grpc.player.ServerPlayerCount as GrpcServerPlayerCount
+import gg.grounds.grpc.player.SetPlayerLocaleReply
+import gg.grounds.grpc.player.SetPlayerLocaleRequest
 import gg.grounds.grpc.player.SuggestPlayerNamesReply
 import gg.grounds.grpc.player.SuggestPlayerNamesRequest
 import gg.grounds.grpc.player.UpdatePlayerServerReply
@@ -108,6 +112,14 @@ constructor(
         request: UpdatePlayerServerRequest
     ): Uni<UpdatePlayerServerReply> {
         return Uni.createFrom().item { handleUpdatePlayerServer(request) }
+    }
+
+    override fun getPlayerLocale(request: GetPlayerLocaleRequest): Uni<GetPlayerLocaleReply> {
+        return Uni.createFrom().item { handleGetPlayerLocale(request) }
+    }
+
+    override fun setPlayerLocale(request: SetPlayerLocaleRequest): Uni<SetPlayerLocaleReply> {
+        return Uni.createFrom().item { handleSetPlayerLocale(request) }
     }
 
     /**
@@ -342,6 +354,29 @@ constructor(
 
         return UpdatePlayerServerReply.newBuilder()
             .setUpdated(repository.updateServer(playerId, serverName))
+            .build()
+    }
+
+    private fun handleGetPlayerLocale(request: GetPlayerLocaleRequest): GetPlayerLocaleReply {
+        val playerId =
+            parsePlayerId(request.playerId)
+                ?: return GetPlayerLocaleReply.newBuilder().setLocale("").build()
+        // No preference (null row/column) is a normal answer: an empty tag, and the caller falls
+        // back to the client locale. A read failure resolves to null too — a language preference is
+        // not worth failing a join over, so unlike the count RPCs this does not throw.
+        val locale = nameRepository.getLocale(playerId) ?: ""
+        return GetPlayerLocaleReply.newBuilder().setLocale(locale).build()
+    }
+
+    private fun handleSetPlayerLocale(request: SetPlayerLocaleRequest): SetPlayerLocaleReply {
+        val playerId =
+            parsePlayerId(request.playerId)
+                ?: return SetPlayerLocaleReply.newBuilder().setUpdated(false).build()
+        // Empty clears the preference (stores NULL). Any other value is stored verbatim — the proxy
+        // validates the tag against the languages it actually ships before calling here.
+        val locale = blankToNull(request.locale)
+        return SetPlayerLocaleReply.newBuilder()
+            .setUpdated(nameRepository.setLocale(playerId, locale))
             .build()
     }
 
