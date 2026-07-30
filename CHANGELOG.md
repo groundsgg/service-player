@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/groundsgg/service-player/compare/v0.5.0...v0.6.0) (2026-07-30)
+
+
+### Features
+
+* persist a per-player language (Get/SetPlayerLocale) ([#93](https://github.com/groundsgg/service-player/issues/93)) ([3dc9cb4](https://github.com/groundsgg/service-player/commit/3dc9cb4ad44905bed6be40700d6b392e7baa0c7f))
+
 ## [0.5.0](https://github.com/groundsgg/service-player/compare/v0.4.0...v0.5.0) (2026-07-24)
 
 
