@@ -45,7 +45,7 @@ dependencies {
     implementation("io.quarkus:quarkus-scheduler")
     implementation("io.nats:jnats:2.26.0")
     implementation("io.quarkus:quarkus-opentelemetry")
-    implementation("gg.grounds:library-grpc-contracts-player:0.5.0")
+    implementation("gg.grounds:library-grpc-contracts-player:0.6.0")
     // Access classes for reads against the EU-resident database. Pinned to a
     // release rather than a SNAPSHOT: what may be served stale is a decision,
     // and a decision should not change because someone merged to main.

@@ -85,6 +85,57 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
         }
     }
 
+    /**
+     * The player's stored language tag, or null when they have set none (the row's `locale` is
+     * NULL) or have never logged in (no row). Both mean the same thing to a caller — use the
+     * client's announced locale — so they are not distinguished.
+     */
+    @Fresh
+    fun getLocale(playerId: UUID): String? {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_LOCALE).use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.executeQuery().use { resultSet ->
+                        if (resultSet.next()) resultSet.getString("locale") else null
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player locale fetch failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            null
+        }
+    }
+
+    /**
+     * Sets (or, with a null [locale], clears) the player's language on their durable row. Updates
+     * only — the row is written at login, so a player online enough to run `/lang` already has one;
+     * a miss (0 rows) returns false rather than inventing a name to insert alongside the locale.
+     */
+    @Fresh
+    fun setLocale(playerId: UUID, locale: String?): Boolean {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(UPDATE_LOCALE).use { statement ->
+                    statement.setString(1, locale)
+                    statement.setObject(2, playerId)
+                    statement.executeUpdate() > 0
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player locale update failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            false
+        }
+    }
+
     companion object {
         private val LOG = Logger.getLogger(PlayerNameRepository::class.java)
 
@@ -101,5 +152,7 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
             FROM player_names
             WHERE player_id = ANY(?)
             """
+        private const val SELECT_LOCALE = "SELECT locale FROM player_names WHERE player_id = ?"
+        private const val UPDATE_LOCALE = "UPDATE player_names SET locale = ? WHERE player_id = ?"
     }
 }
