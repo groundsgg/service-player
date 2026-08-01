@@ -214,47 +214,42 @@ constructor(
 
         val existing = repository.findByPlayerId(playerId)
         if (existing != null) {
-            if (isStale(existing, now)) {
-                val removed = repository.deleteSession(playerId)
-                if (removed == DeleteSessionResult.ERROR) {
-                    LOG.errorf(
-                        "Player stale session cleanup failed (playerId=%s, lastSeenAt=%s, reason=delete_failed)",
-                        playerId,
-                        existing.lastSeenAt,
-                    )
-                    return PlayerLoginReply.newBuilder()
-                        .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
-                        .setMessage("unable to remove stale player session")
-                        .build()
-                }
-                if (removed == DeleteSessionResult.REMOVED) {
-                    LOG.infof(
-                        "Player session expired (playerId=%s, lastSeenAt=%s)",
-                        playerId,
-                        existing.lastSeenAt,
-                    )
-                }
-                if (removed == DeleteSessionResult.NOT_FOUND) {
-                    LOG.infof("Player session missing during stale cleanup (playerId=%s)", playerId)
-                }
-                if (repository.insertSession(session)) {
-                    LOG.infof("Player session created (playerId=%s, result=accepted)", playerId)
+            val stale = isStale(existing, now)
+            // A fresh session on a *different* proxy is what a proxy-to-proxy transfer looks
+            // like from here: the client reconnected before the old proxy's logout (conditional
+            // on its own proxy id, so it cannot undo this) went through. The new login wins.
+            // A login without a proxy id cannot prove it is a different proxy, so it cannot
+            // take over — only wait out the TTL, as before.
+            val takeover = session.proxyId != null && existing.proxyId != session.proxyId
+            if (stale || takeover) {
+                if (repository.replaceSession(session)) {
+                    if (stale) {
+                        LOG.infof(
+                            "Player session expired and replaced (playerId=%s, lastSeenAt=%s)",
+                            playerId,
+                            existing.lastSeenAt,
+                        )
+                    } else {
+                        LOG.infof(
+                            "Player session taken over (playerId=%s, fromProxy=%s, toProxy=%s)",
+                            playerId,
+                            existing.proxyId,
+                            session.proxyId,
+                        )
+                    }
                     return PlayerLoginReply.newBuilder()
                         .setStatus(LoginStatus.LOGIN_STATUS_ACCEPTED)
                         .setMessage("player accepted")
                         .build()
                 }
-                val recreated = repository.findByPlayerId(playerId)
-                if (recreated == null) {
-                    LOG.errorf(
-                        "Player session recreation failed (playerId=%s, reason=insert_failed)",
-                        playerId,
-                    )
-                    return PlayerLoginReply.newBuilder()
-                        .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
-                        .setMessage("unable to create player session after stale cleanup")
-                        .build()
-                }
+                LOG.errorf(
+                    "Player session replacement failed (playerId=%s, reason=replace_failed)",
+                    playerId,
+                )
+                return PlayerLoginReply.newBuilder()
+                    .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
+                    .setMessage("unable to replace player session")
+                    .build()
             }
 
             LOG.infof("Player session rejected (playerId=%s, reason=already_online)", playerId)
@@ -279,7 +274,13 @@ constructor(
                     .setMessage("player_id must be a UUID")
                     .build()
 
-        return when (repository.deleteSession(playerId)) {
+        // Scoped to the calling proxy when it says who it is: a logout that raced a transfer
+        // must not delete the session the next proxy just created. Unscoped from older plugins.
+        val proxyId = blankToNull(request.proxyId)
+        val deleted =
+            if (proxyId != null) repository.deleteSessionOwnedBy(playerId, proxyId)
+            else repository.deleteSession(playerId)
+        return when (deleted) {
             DeleteSessionResult.REMOVED -> {
                 LOG.infof("Player session removed (playerId=%s, result=logout)", playerId)
                 PlayerLogoutReply.newBuilder().setRemoved(true).setMessage("player removed").build()

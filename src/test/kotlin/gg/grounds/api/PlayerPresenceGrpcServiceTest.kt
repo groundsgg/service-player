@@ -138,10 +138,10 @@ class PlayerPresenceGrpcServiceTest {
     @Test
     fun loginAcceptsWhenExistingSessionIsStale() {
         val playerId = UUID.randomUUID()
-        whenever(repository.insertSession(any())).thenReturn(false, true)
+        whenever(repository.insertSession(any())).thenReturn(false)
         whenever(repository.findByPlayerId(eq(playerId)))
             .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
-        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.REMOVED)
+        whenever(repository.replaceSession(any())).thenReturn(true)
 
         val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
 
@@ -149,63 +149,70 @@ class PlayerPresenceGrpcServiceTest {
 
         assertEquals(LoginStatus.LOGIN_STATUS_ACCEPTED, reply.status)
         assertEquals("player accepted", reply.message)
-        verify(repository).deleteSession(playerId)
-        verify(repository, times(2)).insertSession(any())
+        verify(repository).replaceSession(any())
     }
 
     @Test
-    fun loginAcceptsWhenStaleSessionAlreadyRemoved() {
+    fun loginTakesOverFreshSessionFromAnotherProxy() {
         val playerId = UUID.randomUUID()
-        whenever(repository.insertSession(any())).thenReturn(false, true)
+        whenever(repository.insertSession(any())).thenReturn(false)
         whenever(repository.findByPlayerId(eq(playerId)))
-            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
-        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.NOT_FOUND)
+            .thenReturn(
+                PlayerSession(playerId, Instant.EPOCH, Instant.now(), proxyId = "velocity-old")
+            )
+        whenever(repository.replaceSession(any())).thenReturn(true)
 
-        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
+        val request =
+            PlayerLoginRequest.newBuilder()
+                .setPlayerId(playerId.toString())
+                .setProxyId("velocity-new")
+                .build()
 
         val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
 
         assertEquals(LoginStatus.LOGIN_STATUS_ACCEPTED, reply.status)
-        assertEquals("player accepted", reply.message)
-        verify(repository).deleteSession(playerId)
-        verify(repository, times(2)).insertSession(any())
+        val sessionCaptor = argumentCaptor<PlayerSession>()
+        verify(repository).replaceSession(sessionCaptor.capture())
+        assertEquals("velocity-new", sessionCaptor.firstValue.proxyId)
     }
 
     @Test
-    fun loginReturnsErrorWhenStaleSessionRemovalFails() {
+    fun loginStaysAlreadyOnlineWhenTheFreshSessionIsOnTheSameProxy() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.insertSession(any())).thenReturn(false)
+        whenever(repository.findByPlayerId(eq(playerId)))
+            .thenReturn(
+                PlayerSession(playerId, Instant.EPOCH, Instant.now(), proxyId = "velocity-1")
+            )
+
+        val request =
+            PlayerLoginRequest.newBuilder()
+                .setPlayerId(playerId.toString())
+                .setProxyId("velocity-1")
+                .build()
+
+        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
+
+        assertEquals(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE, reply.status)
+        verify(repository, times(0)).replaceSession(any())
+    }
+
+    @Test
+    fun loginReturnsErrorWhenReplaceFails() {
         val playerId = UUID.randomUUID()
         whenever(repository.insertSession(any())).thenReturn(false)
         whenever(repository.findByPlayerId(eq(playerId)))
             .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH))
-        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.ERROR)
+        whenever(repository.replaceSession(any())).thenReturn(false)
 
         val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
 
         val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
 
         assertEquals(LoginStatus.LOGIN_STATUS_ERROR, reply.status)
-        assertEquals("unable to remove stale player session", reply.message)
-        verify(repository).deleteSession(playerId)
+        assertEquals("unable to replace player session", reply.message)
+        verify(repository).replaceSession(any())
         verify(repository, times(1)).insertSession(any())
-    }
-
-    @Test
-    fun loginReturnsErrorWhenStaleSessionReinsertFails() {
-        val playerId = UUID.randomUUID()
-        whenever(repository.insertSession(any())).thenReturn(false, false)
-        whenever(repository.findByPlayerId(eq(playerId)))
-            .thenReturn(PlayerSession(playerId, Instant.EPOCH, Instant.EPOCH), null)
-        whenever(repository.deleteSession(eq(playerId))).thenReturn(DeleteSessionResult.REMOVED)
-
-        val request = PlayerLoginRequest.newBuilder().setPlayerId(playerId.toString()).build()
-
-        val reply: PlayerLoginReply = service.tryPlayerLogin(request).await().indefinitely()
-
-        assertEquals(LoginStatus.LOGIN_STATUS_ERROR, reply.status)
-        assertEquals("unable to create player session after stale cleanup", reply.message)
-        verify(repository).deleteSession(playerId)
-        verify(repository, times(2)).insertSession(any())
-        verify(repository, times(2)).findByPlayerId(playerId)
     }
 
     @Test
@@ -232,6 +239,25 @@ class PlayerPresenceGrpcServiceTest {
         assertFalse(reply.removed)
         assertEquals("player_id must be a UUID", reply.message)
         verifyNoInteractions(repository)
+    }
+
+    @Test
+    fun logoutScopesTheDeleteToTheCallingProxy() {
+        val playerId = UUID.randomUUID()
+        whenever(repository.deleteSessionOwnedBy(eq(playerId), eq("velocity-1")))
+            .thenReturn(DeleteSessionResult.REMOVED)
+
+        val request =
+            PlayerLogoutRequest.newBuilder()
+                .setPlayerId(playerId.toString())
+                .setProxyId("velocity-1")
+                .build()
+
+        val reply: PlayerLogoutReply = service.playerLogout(request).await().indefinitely()
+
+        assertTrue(reply.removed)
+        verify(repository).deleteSessionOwnedBy(playerId, "velocity-1")
+        verify(repository, times(0)).deleteSession(any())
     }
 
     @Test

@@ -70,6 +70,37 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    /**
+     * Insert-or-overwrite in one statement, for the two cases where the caller has decided the
+     * existing row lost: a stale session, or a takeover by another proxy. Atomic on purpose — a
+     * separate delete + insert leaves a window in which a concurrent logout removes the row that
+     * was just written.
+     */
+    @Fresh
+    fun replaceSession(session: PlayerSession): Boolean {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(REPLACE_SESSION).use { statement ->
+                    statement.setObject(1, session.playerId)
+                    statement.setTimestamp(2, Timestamp.from(session.connectedAt))
+                    statement.setTimestamp(3, Timestamp.from(session.lastSeenAt))
+                    statement.setString(4, session.playerName)
+                    statement.setString(5, session.proxyId)
+                    statement.setString(6, session.serverName)
+                    statement.setString(7, session.region)
+                    statement.executeUpdate() > 0
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session replace failed (playerId=%s, reason=sql_error)",
+                session.playerId,
+            )
+            false
+        }
+    }
+
     @Fresh
     fun findByPlayerId(playerId: UUID): PlayerSession? {
         return try {
@@ -187,6 +218,35 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 error,
                 "Player session delete failed (playerId=%s, reason=sql_error)",
                 playerId,
+            )
+            DeleteSessionResult.ERROR
+        }
+    }
+
+    /**
+     * Removes the session only while it still belongs to [proxyId]. The logout of a transferred
+     * player arrives from the proxy they *left* — by then the session may already belong to the
+     * proxy they arrived on, and that session must survive. NOT_FOUND covers both "no session" and
+     * "session owned by someone else", which is exactly what the leaving proxy should treat it as:
+     * nothing of yours to clean up.
+     */
+    @Fresh
+    fun deleteSessionOwnedBy(playerId: UUID, proxyId: String): DeleteSessionResult {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(DELETE_BY_PLAYER_AND_PROXY).use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.setString(2, proxyId)
+                    if (statement.executeUpdate() > 0) DeleteSessionResult.REMOVED
+                    else DeleteSessionResult.NOT_FOUND
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session delete failed (playerId=%s, proxyId=%s, reason=sql_error)",
+                playerId,
+                proxyId,
             )
             DeleteSessionResult.ERROR
         }
@@ -385,10 +445,27 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             SET server_name = ?
             WHERE player_id = ?
             """
+        private const val REPLACE_SESSION =
+            """
+            INSERT INTO player_sessions (player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (player_id) DO UPDATE
+            SET connected_at = EXCLUDED.connected_at,
+                last_seen_at = EXCLUDED.last_seen_at,
+                player_name = EXCLUDED.player_name,
+                proxy_id = EXCLUDED.proxy_id,
+                server_name = EXCLUDED.server_name,
+                region = EXCLUDED.region
+            """
         private const val DELETE_BY_PLAYER =
             """
             DELETE FROM player_sessions
             WHERE player_id = ?
+            """
+        private const val DELETE_BY_PLAYER_AND_PROXY =
+            """
+            DELETE FROM player_sessions
+            WHERE player_id = ? AND proxy_id = ?
             """
         private const val UPDATE_LAST_SEEN_BATCH =
             """
