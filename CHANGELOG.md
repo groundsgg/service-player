@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/groundsgg/service-player/compare/v0.6.0...v0.7.0) (2026-08-02)
+
+
+### Features
+
+* **presence:** session takeover on proxy change, proxy-scoped logout ([#95](https://github.com/groundsgg/service-player/issues/95)) ([27be8cb](https://github.com/groundsgg/service-player/commit/27be8cb06295df031da34239801214ec0f03b54e))
+
 ## [0.6.0](https://github.com/groundsgg/service-player/compare/v0.5.0...v0.6.0) (2026-07-30)
 
 
