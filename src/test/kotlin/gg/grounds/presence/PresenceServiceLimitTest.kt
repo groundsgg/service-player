@@ -1,10 +1,10 @@
-package gg.grounds.api
+package gg.grounds.presence
 
-import gg.grounds.api.PlayerPresenceGrpcService.Companion.cappedSuggestLimit
+import gg.grounds.presence.PresenceService.Companion.cappedSuggestLimit
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-class PlayerPresenceGrpcServiceLimitTest {
+class PresenceServiceLimitTest {
     @Test
     fun `cappedSuggestLimit defaults to 25 when limit is zero`() {
         assertEquals(25, cappedSuggestLimit(0))

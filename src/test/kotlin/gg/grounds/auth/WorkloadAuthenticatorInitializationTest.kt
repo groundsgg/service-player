@@ -9,10 +9,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-class GroundsAuthInterceptorInitializationTest {
+class WorkloadAuthenticatorInitializationTest {
     @Test
-    fun `interceptor is initialized during application startup`() {
-        assertTrue(GroundsAuthInterceptor::class.java.isAnnotationPresent(Startup::class.java))
+    fun `authenticator is initialized during application startup`() {
+        assertTrue(WorkloadAuthenticator::class.java.isAnnotationPresent(Startup::class.java))
     }
 
     @Test
@@ -29,8 +29,8 @@ class GroundsAuthInterceptorInitializationTest {
         server.start()
 
         try {
-            val interceptor =
-                GroundsAuthInterceptor(
+            val authenticator =
+                WorkloadAuthenticator(
                     enabled = true,
                     jwksUrl = "http://127.0.0.1:${server.address.port}/jwks",
                     expectedAudience = "grounds-services",
@@ -38,7 +38,7 @@ class GroundsAuthInterceptorInitializationTest {
                     tokenFile = "/path/that/does/not/exist/token",
                 )
 
-            interceptor.init()
+            authenticator.init()
 
             assertTrue(requests.get() > 0)
         } finally {
