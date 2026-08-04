@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/groundsgg/service-player/compare/v0.8.0...v0.9.0) (2026-08-04)
+
+
+### Features
+
+* **api:** serve presence over REST and publish an OpenAPI snapshot ([#99](https://github.com/groundsgg/service-player/issues/99)) ([bab100a](https://github.com/groundsgg/service-player/commit/bab100aaf38b8a40587a19b80a458a1d74a9cdc5))
+
 ## [0.8.0](https://github.com/groundsgg/service-player/compare/v0.7.0...v0.8.0) (2026-08-04)
 
 
