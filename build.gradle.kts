@@ -45,6 +45,8 @@ dependencies {
     implementation("io.quarkus:quarkus-scheduler")
     implementation("io.nats:jnats:2.26.0")
     implementation("io.quarkus:quarkus-opentelemetry")
+    // Prometheus metrics on /q/metrics — JVM, HTTP and the Agroal pool.
+    implementation("io.quarkus:quarkus-micrometer-registry-prometheus")
     implementation("gg.grounds:library-grpc-contracts-player:0.7.0")
     // Access classes for reads against the EU-resident database. Pinned to a
     // release rather than a SNAPSHOT: what may be served stale is a decision,
