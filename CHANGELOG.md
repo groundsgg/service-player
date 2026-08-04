@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/groundsgg/service-player/compare/v0.7.0...v0.8.0) (2026-08-04)
+
+
+### Features
+
+* **metrics:** expose JVM, HTTP and connection-pool metrics ([#97](https://github.com/groundsgg/service-player/issues/97)) ([d9b25f2](https://github.com/groundsgg/service-player/commit/d9b25f295aca72b693cfe7fc6adc6dab74083120))
+
 ## [0.7.0](https://github.com/groundsgg/service-player/compare/v0.6.0...v0.7.0) (2026-08-02)
 
 
