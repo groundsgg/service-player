@@ -30,408 +30,229 @@ import gg.grounds.grpc.player.SuggestPlayerNamesReply
 import gg.grounds.grpc.player.SuggestPlayerNamesRequest
 import gg.grounds.grpc.player.UpdatePlayerServerReply
 import gg.grounds.grpc.player.UpdatePlayerServerRequest
-import gg.grounds.persistence.PlayerNameRepository
 import gg.grounds.persistence.PlayerSessionRepository
-import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByProxyResult
-import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
-import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
+import gg.grounds.presence.PlayerHeartbeatService
+import gg.grounds.presence.PlayerHeartbeatService.HeartbeatOutcome
+import gg.grounds.presence.PresenceService
+import gg.grounds.presence.PresenceService.LoginOutcome
+import gg.grounds.presence.PresenceService.LogoutOutcome
 import io.grpc.Status
 import io.quarkus.grpc.GrpcService
 import io.smallrye.common.annotation.Blocking
 import io.smallrye.mutiny.Uni
 import jakarta.inject.Inject
-import java.time.Duration
-import java.time.Instant
-import java.util.UUID
-import kotlin.math.min
-import org.eclipse.microprofile.config.inject.ConfigProperty
-import org.jboss.logging.Logger
 
+/**
+ * The gRPC face of the presence API, kept only until `plugin-player` and `plugin-match` have moved
+ * to the HTTP API this service now publishes.
+ *
+ * It holds no rules of its own: every method maps a protobuf message onto [PresenceService] and its
+ * answer back, so retiring gRPC is a subtraction rather than a rewrite. Where a message names a
+ * field — `player_id`, `player_ids` — the wording is produced here, because the same outcome is
+ * spelled `playerId` in JSON.
+ */
 @GrpcService
 @Blocking
 class PlayerPresenceGrpcService
 @Inject
 constructor(
-    private val repository: PlayerSessionRepository,
-    private val nameRepository: PlayerNameRepository,
+    private val presence: PresenceService,
     private val heartbeatService: PlayerHeartbeatService,
 ) : PlayerPresenceService {
-    @ConfigProperty(name = "grounds.player.sessions.ttl", defaultValue = "90s")
-    private lateinit var sessionTtl: Duration
 
-    override fun tryPlayerLogin(request: PlayerLoginRequest): Uni<PlayerLoginReply> {
-        return Uni.createFrom().item { handleLogin(request) }
-    }
+    override fun tryPlayerLogin(request: PlayerLoginRequest): Uni<PlayerLoginReply> =
+        Uni.createFrom().item {
+            val reply = PlayerLoginReply.newBuilder()
+            when (
+                val outcome =
+                    presence.login(
+                        playerId = request.playerId,
+                        playerName = request.playerName,
+                        proxyId = request.proxyId,
+                        region = request.region,
+                    )
+            ) {
+                LoginOutcome.Accepted ->
+                    reply.setStatus(LoginStatus.LOGIN_STATUS_ACCEPTED).setMessage("player accepted")
+                LoginOutcome.AlreadyOnline ->
+                    reply
+                        .setStatus(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE)
+                        .setMessage("player already online")
+                LoginOutcome.InvalidPlayerId ->
+                    reply
+                        .setStatus(LoginStatus.LOGIN_STATUS_INVALID_REQUEST)
+                        .setMessage("player_id must be a UUID")
+                is LoginOutcome.Failed ->
+                    reply.setStatus(LoginStatus.LOGIN_STATUS_ERROR).setMessage(outcome.message)
+            }
+            reply.build()
+        }
 
-    override fun playerLogout(request: PlayerLogoutRequest): Uni<PlayerLogoutReply> {
-        return Uni.createFrom().item { handleLogout(request) }
-    }
+    override fun playerLogout(request: PlayerLogoutRequest): Uni<PlayerLogoutReply> =
+        Uni.createFrom().item {
+            val reply = PlayerLogoutReply.newBuilder()
+            when (val outcome = presence.logout(request.playerId, request.proxyId)) {
+                LogoutOutcome.Removed -> reply.setRemoved(true).setMessage("player removed")
+                LogoutOutcome.NotFound ->
+                    reply.setRemoved(false).setMessage("player session not found")
+                LogoutOutcome.InvalidPlayerId ->
+                    reply.setRemoved(false).setMessage("player_id must be a UUID")
+                is LogoutOutcome.Failed -> reply.setRemoved(false).setMessage(outcome.message)
+            }
+            reply.build()
+        }
 
     override fun playerHeartbeatBatch(
         request: PlayerHeartbeatBatchRequest
-    ): Uni<PlayerHeartbeatBatchReply> {
-        return Uni.createFrom().item { heartbeatService.handleHeartbeatBatch(request) }
-    }
+    ): Uni<PlayerHeartbeatBatchReply> =
+        Uni.createFrom().item {
+            val reply = PlayerHeartbeatBatchReply.newBuilder()
+            when (val outcome = heartbeatService.handleHeartbeatBatch(request.playerIdsList)) {
+                is HeartbeatOutcome.Accepted ->
+                    reply
+                        .setUpdated(outcome.updated)
+                        .setMissing(outcome.missing)
+                        .setSuccess(true)
+                        .setMessage("heartbeat accepted")
+                is HeartbeatOutcome.Rejected ->
+                    reply
+                        .setUpdated(0)
+                        .setMissing(0)
+                        .setSuccess(false)
+                        .setMessage(
+                            when (outcome.reason) {
+                                HeartbeatOutcome.Reason.INVALID_PLAYER_IDS ->
+                                    "player_ids must be UUIDs"
+                                HeartbeatOutcome.Reason.EMPTY -> "no player ids provided"
+                            }
+                        )
+                is HeartbeatOutcome.Failed ->
+                    reply
+                        .setUpdated(0)
+                        .setMissing(outcome.missing)
+                        .setSuccess(false)
+                        .setMessage(outcome.message)
+            }
+            reply.build()
+        }
 
-    /**
-     * Who and where a player is. A proxy calls this for someone who is not connected to it — it has
-     * no other way to know they exist.
-     *
-     * Absent player, unknown id, unparseable uuid: `found = false`, never an error status. The
-     * callers are Velocity command handlers; an exception here lands on the event loop.
-     */
-    override fun getPlayerSession(request: GetPlayerSessionRequest): Uni<GetPlayerSessionReply> {
-        return Uni.createFrom().item { handleGetPlayerSession(request) }
-    }
+    override fun getPlayerSession(request: GetPlayerSessionRequest): Uni<GetPlayerSessionReply> =
+        Uni.createFrom().item {
+            val session = presence.findSession(request.playerId)
+            val reply = GetPlayerSessionReply.newBuilder().setFound(session != null)
+            if (session != null) {
+                reply.setSession(toSessionInfo(session))
+            }
+            reply.build()
+        }
 
-    /**
-     * Name to session — the lookup behind `/msg <name>` and `/party invite <name>` when the target
-     * is on another proxy. Case-insensitive: Minecraft names are unique, their casing is not.
-     */
-    override fun resolvePlayerName(request: ResolvePlayerNameRequest): Uni<ResolvePlayerNameReply> {
-        return Uni.createFrom().item { handleResolvePlayerName(request) }
-    }
+    override fun resolvePlayerName(request: ResolvePlayerNameRequest): Uni<ResolvePlayerNameReply> =
+        Uni.createFrom().item {
+            val session = presence.resolveName(request.playerName)
+            val reply = ResolvePlayerNameReply.newBuilder().setFound(session != null)
+            if (session != null) {
+                reply.setSession(toSessionInfo(session))
+            }
+            reply.build()
+        }
 
-    /**
-     * Tab-complete. A prefix search with a hard cap ([MAX_SUGGEST_LIMIT]) — deliberately NOT a list
-     * of everyone online: Velocity fires tab-complete on every keystroke, so at 10k players a
-     * roster would be a large response sent thousands of times a second, scanning the table each
-     * time. A blank prefix returns nothing rather than everything, for the same reason.
-     */
     override fun suggestPlayerNames(
         request: SuggestPlayerNamesRequest
-    ): Uni<SuggestPlayerNamesReply> {
-        return Uni.createFrom().item { handleSuggestPlayerNames(request) }
-    }
+    ): Uni<SuggestPlayerNamesReply> =
+        Uni.createFrom().item {
+            SuggestPlayerNamesReply.newBuilder()
+                .addAllPlayerNames(presence.suggestNames(request.prefix, request.limit))
+                .build()
+        }
 
-    /**
-     * Follows a player across backend servers, so a session says where they actually are — a party
-     * warp needs the target's server, and only the proxy holding them knows when it changes.
-     */
     override fun updatePlayerServer(
         request: UpdatePlayerServerRequest
-    ): Uni<UpdatePlayerServerReply> {
-        return Uni.createFrom().item { handleUpdatePlayerServer(request) }
-    }
+    ): Uni<UpdatePlayerServerReply> =
+        Uni.createFrom().item {
+            UpdatePlayerServerReply.newBuilder()
+                .setUpdated(presence.updateServer(request.playerId, request.serverName))
+                .build()
+        }
 
-    override fun getPlayerLocale(request: GetPlayerLocaleRequest): Uni<GetPlayerLocaleReply> {
-        return Uni.createFrom().item { handleGetPlayerLocale(request) }
-    }
+    override fun getPlayerLocale(request: GetPlayerLocaleRequest): Uni<GetPlayerLocaleReply> =
+        Uni.createFrom().item {
+            // Absent is an empty tag on the wire: proto3 has no null, and the caller falls back to
+            // the client's announced locale either way.
+            GetPlayerLocaleReply.newBuilder()
+                .setLocale(presence.getLocale(request.playerId) ?: "")
+                .build()
+        }
 
-    override fun setPlayerLocale(request: SetPlayerLocaleRequest): Uni<SetPlayerLocaleReply> {
-        return Uni.createFrom().item { handleSetPlayerLocale(request) }
-    }
+    override fun setPlayerLocale(request: SetPlayerLocaleRequest): Uni<SetPlayerLocaleReply> =
+        Uni.createFrom().item {
+            SetPlayerLocaleReply.newBuilder()
+                .setUpdated(presence.setLocale(request.playerId, request.locale))
+                .build()
+        }
 
-    /**
-     * Turns ids back into names for players who are NOT online — the durable index behind a
-     * leaderboard, match history, or anything else that outlives a session. Ids never seen are
-     * simply absent from the reply map, not mapped to a placeholder.
-     */
-    override fun lookupPlayerNames(request: LookupPlayerNamesRequest): Uni<LookupPlayerNamesReply> {
-        return Uni.createFrom().item { handleLookupPlayerNames(request) }
-    }
+    override fun lookupPlayerNames(request: LookupPlayerNamesRequest): Uni<LookupPlayerNamesReply> =
+        Uni.createFrom().item {
+            LookupPlayerNamesReply.newBuilder()
+                .putAllNames(
+                    presence.lookupNames(request.playerIdsList).mapKeys { (playerId, _) ->
+                        playerId.toString()
+                    }
+                )
+                .build()
+        }
 
-    /**
-     * Network-wide players per backend server. Velocity can only count the players connected to
-     * itself, so with more than one proxy in front of a server each of them sees only part of it —
-     * this reads the truth out of the session table instead.
-     */
     override fun countPlayersByServer(
         request: CountPlayersByServerRequest
-    ): Uni<CountPlayersByServerReply> {
-        return Uni.createFrom().item { handleCountPlayersByServer() }
-    }
+    ): Uni<CountPlayersByServerReply> =
+        Uni.createFrom().item {
+            val counts = countOrUnavailable { presence.countPlayersByServer() }
+            CountPlayersByServerReply.newBuilder()
+                .addAllServers(counts.servers.map(::toServerPlayerCount))
+                .setTotal(counts.total)
+                .build()
+        }
 
-    /**
-     * How the network is spread across proxies, and where those proxies are.
-     *
-     * The sibling call groups the same players by backend server. Neither caller wants both:
-     * /agones asks which servers are busy, /online asks which proxies and regions hold people.
-     */
     override fun countPlayersByProxy(
         request: CountPlayersByProxyRequest
-    ): Uni<CountPlayersByProxyReply> {
-        return Uni.createFrom().item { handleCountPlayersByProxy() }
-    }
-
-    private fun handleCountPlayersByProxy(): CountPlayersByProxyReply {
-        return when (val result = repository.countPlayersByProxy()) {
-            is CountPlayersByProxyResult.Counted ->
-                CountPlayersByProxyReply.newBuilder()
-                    .addAllProxies(result.proxies.map(::toProxyPlayerCount))
-                    .setTotal(result.total)
-                    .build()
-            CountPlayersByProxyResult.Error ->
-                throw Status.UNAVAILABLE.withDescription("player session count is unavailable")
-                    .asRuntimeException()
+    ): Uni<CountPlayersByProxyReply> =
+        Uni.createFrom().item {
+            val counts = countOrUnavailable { presence.countPlayersByProxy() }
+            CountPlayersByProxyReply.newBuilder()
+                .addAllProxies(counts.proxies.map(::toProxyPlayerCount))
+                .setTotal(counts.total)
+                .build()
         }
-    }
+
+    /**
+     * A count the store could not answer fails the call rather than reporting zero — an empty reply
+     * reads as "nobody is online anywhere", which callers will happily render.
+     */
+    private fun <T> countOrUnavailable(read: () -> T): T =
+        try {
+            read()
+        } catch (unavailable: PresenceService.PresenceUnavailableException) {
+            throw Status.UNAVAILABLE.withDescription(unavailable.message).asRuntimeException()
+        }
+
+    private fun toServerPlayerCount(
+        count: PlayerSessionRepository.ServerPlayerCount
+    ): GrpcServerPlayerCount =
+        GrpcServerPlayerCount.newBuilder()
+            .setServerName(count.serverName)
+            .setPlayers(count.players)
+            .build()
 
     private fun toProxyPlayerCount(
         count: PlayerSessionRepository.ProxyPlayerCount
-    ): GrpcProxyPlayerCount {
-        return GrpcProxyPlayerCount.newBuilder()
+    ): GrpcProxyPlayerCount =
+        GrpcProxyPlayerCount.newBuilder()
             .setProxyId(count.proxyId)
             .setRegion(count.region ?: "")
             .setPlayers(count.players)
             .build()
-    }
 
-    private fun handleLogin(request: PlayerLoginRequest): PlayerLoginReply {
-        val playerId =
-            parsePlayerId(request.playerId)
-                ?: return PlayerLoginReply.newBuilder()
-                    .setStatus(LoginStatus.LOGIN_STATUS_INVALID_REQUEST)
-                    .setMessage("player_id must be a UUID")
-                    .build()
-
-        val now = Instant.now()
-        val playerName = blankToNull(request.playerName)
-        // Written regardless of what happens below: a login rejected as already-online still
-        // came with a real id + name from the proxy, and that is all the durable index needs.
-        // Best-effort — a failure here must not block the session logic that follows.
-        if (playerName != null) {
-            nameRepository.upsertName(playerId, playerName, now)
-        }
-
-        val session =
-            PlayerSession(
-                playerId,
-                now,
-                now,
-                playerName,
-                blankToNull(request.proxyId),
-                region = blankToNull(request.region),
-            )
-        val inserted = repository.insertSession(session)
-        if (inserted) {
-            LOG.infof("Player session created (playerId=%s, result=accepted)", playerId)
-            return PlayerLoginReply.newBuilder()
-                .setStatus(LoginStatus.LOGIN_STATUS_ACCEPTED)
-                .setMessage("player accepted")
-                .build()
-        }
-
-        val existing = repository.findByPlayerId(playerId)
-        if (existing != null) {
-            val stale = isStale(existing, now)
-            // A fresh session on a *different* proxy is what a proxy-to-proxy transfer looks
-            // like from here: the client reconnected before the old proxy's logout (conditional
-            // on its own proxy id, so it cannot undo this) went through. The new login wins.
-            // A login without a proxy id cannot prove it is a different proxy, so it cannot
-            // take over — only wait out the TTL, as before.
-            val takeover = session.proxyId != null && existing.proxyId != session.proxyId
-            if (stale || takeover) {
-                if (repository.replaceSession(session)) {
-                    if (stale) {
-                        LOG.infof(
-                            "Player session expired and replaced (playerId=%s, lastSeenAt=%s)",
-                            playerId,
-                            existing.lastSeenAt,
-                        )
-                    } else {
-                        LOG.infof(
-                            "Player session taken over (playerId=%s, fromProxy=%s, toProxy=%s)",
-                            playerId,
-                            existing.proxyId,
-                            session.proxyId,
-                        )
-                    }
-                    return PlayerLoginReply.newBuilder()
-                        .setStatus(LoginStatus.LOGIN_STATUS_ACCEPTED)
-                        .setMessage("player accepted")
-                        .build()
-                }
-                LOG.errorf(
-                    "Player session replacement failed (playerId=%s, reason=replace_failed)",
-                    playerId,
-                )
-                return PlayerLoginReply.newBuilder()
-                    .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
-                    .setMessage("unable to replace player session")
-                    .build()
-            }
-
-            LOG.infof("Player session rejected (playerId=%s, reason=already_online)", playerId)
-            return PlayerLoginReply.newBuilder()
-                .setStatus(LoginStatus.LOGIN_STATUS_ALREADY_ONLINE)
-                .setMessage("player already online")
-                .build()
-        }
-
-        LOG.errorf("Player session verification failed (playerId=%s)", playerId)
-        return PlayerLoginReply.newBuilder()
-            .setStatus(LoginStatus.LOGIN_STATUS_ERROR)
-            .setMessage("unable to verify player session")
-            .build()
-    }
-
-    private fun handleLogout(request: PlayerLogoutRequest): PlayerLogoutReply {
-        val playerId =
-            parsePlayerId(request.playerId)
-                ?: return PlayerLogoutReply.newBuilder()
-                    .setRemoved(false)
-                    .setMessage("player_id must be a UUID")
-                    .build()
-
-        // Scoped to the calling proxy when it says who it is: a logout that raced a transfer
-        // must not delete the session the next proxy just created. Unscoped from older plugins.
-        val proxyId = blankToNull(request.proxyId)
-        val deleted =
-            if (proxyId != null) repository.deleteSessionOwnedBy(playerId, proxyId)
-            else repository.deleteSession(playerId)
-        return when (deleted) {
-            DeleteSessionResult.REMOVED -> {
-                LOG.infof("Player session removed (playerId=%s, result=logout)", playerId)
-                PlayerLogoutReply.newBuilder().setRemoved(true).setMessage("player removed").build()
-            }
-            DeleteSessionResult.NOT_FOUND ->
-                PlayerLogoutReply.newBuilder()
-                    .setRemoved(false)
-                    .setMessage("player session not found")
-                    .build()
-            DeleteSessionResult.ERROR -> {
-                LOG.errorf(
-                    "Player session removal failed (playerId=%s, reason=delete_failed)",
-                    playerId,
-                )
-                PlayerLogoutReply.newBuilder()
-                    .setRemoved(false)
-                    .setMessage("unable to remove player session")
-                    .build()
-            }
-        }
-    }
-
-    private fun handleGetPlayerSession(request: GetPlayerSessionRequest): GetPlayerSessionReply {
-        val playerId =
-            parsePlayerId(request.playerId)
-                ?: return GetPlayerSessionReply.newBuilder().setFound(false).build()
-
-        val session =
-            repository.findByPlayerId(playerId)
-                ?: return GetPlayerSessionReply.newBuilder().setFound(false).build()
-
-        return GetPlayerSessionReply.newBuilder()
-            .setFound(true)
-            .setSession(toSessionInfo(session))
-            .build()
-    }
-
-    private fun handleResolvePlayerName(request: ResolvePlayerNameRequest): ResolvePlayerNameReply {
-        val name =
-            blankToNull(request.playerName)
-                ?: return ResolvePlayerNameReply.newBuilder().setFound(false).build()
-
-        val session =
-            repository.findByName(name)
-                ?: return ResolvePlayerNameReply.newBuilder().setFound(false).build()
-
-        return ResolvePlayerNameReply.newBuilder()
-            .setFound(true)
-            .setSession(toSessionInfo(session))
-            .build()
-    }
-
-    private fun handleSuggestPlayerNames(
-        request: SuggestPlayerNamesRequest
-    ): SuggestPlayerNamesReply {
-        val prefix =
-            blankToNull(request.prefix) ?: return SuggestPlayerNamesReply.newBuilder().build()
-
-        val names = repository.suggestNames(prefix, cappedSuggestLimit(request.limit))
-        return SuggestPlayerNamesReply.newBuilder().addAllPlayerNames(names).build()
-    }
-
-    private fun handleUpdatePlayerServer(
-        request: UpdatePlayerServerRequest
-    ): UpdatePlayerServerReply {
-        val playerId =
-            parsePlayerId(request.playerId)
-                ?: return UpdatePlayerServerReply.newBuilder().setUpdated(false).build()
-        val serverName =
-            blankToNull(request.serverName)
-                ?: return UpdatePlayerServerReply.newBuilder().setUpdated(false).build()
-
-        return UpdatePlayerServerReply.newBuilder()
-            .setUpdated(repository.updateServer(playerId, serverName))
-            .build()
-    }
-
-    private fun handleGetPlayerLocale(request: GetPlayerLocaleRequest): GetPlayerLocaleReply {
-        val playerId =
-            parsePlayerId(request.playerId)
-                ?: return GetPlayerLocaleReply.newBuilder().setLocale("").build()
-        // No preference (null row/column) is a normal answer: an empty tag, and the caller falls
-        // back to the client locale. A read failure resolves to null too — a language preference is
-        // not worth failing a join over, so unlike the count RPCs this does not throw.
-        val locale = nameRepository.getLocale(playerId) ?: ""
-        return GetPlayerLocaleReply.newBuilder().setLocale(locale).build()
-    }
-
-    private fun handleSetPlayerLocale(request: SetPlayerLocaleRequest): SetPlayerLocaleReply {
-        val playerId =
-            parsePlayerId(request.playerId)
-                ?: return SetPlayerLocaleReply.newBuilder().setUpdated(false).build()
-        // Empty clears the preference (stores NULL). Any other value is stored verbatim — the proxy
-        // validates the tag against the languages it actually ships before calling here.
-        val locale = blankToNull(request.locale)
-        return SetPlayerLocaleReply.newBuilder()
-            .setUpdated(nameRepository.setLocale(playerId, locale))
-            .build()
-    }
-
-    /**
-     * A repository failure fails the call, rather than answering zero.
-     *
-     * The reply has no error field, and the other RPCs collapse "failed" into their negative answer
-     * — `found=false`, `updated=false` — because for them the caller acts the same either way. A
-     * count is different: an empty reply reads as "nobody is online anywhere", which is a perfectly
-     * plausible number that callers will render. Handing that out when the database is unreachable
-     * is how a proxy came to print a player count it had no business being sure of. UNAVAILABLE
-     * lets the caller say it could not ask.
-     */
-    private fun handleCountPlayersByServer(): CountPlayersByServerReply {
-        return when (val result = repository.countPlayersByServer()) {
-            is CountPlayersByServerResult.Counted ->
-                CountPlayersByServerReply.newBuilder()
-                    .addAllServers(result.servers.map(::toServerPlayerCount))
-                    .setTotal(result.total)
-                    .build()
-            CountPlayersByServerResult.Error ->
-                throw Status.UNAVAILABLE.withDescription("player session count is unavailable")
-                    .asRuntimeException()
-        }
-    }
-
-    private fun toServerPlayerCount(
-        count: PlayerSessionRepository.ServerPlayerCount
-    ): GrpcServerPlayerCount {
-        return GrpcServerPlayerCount.newBuilder()
-            .setServerName(count.serverName)
-            .setPlayers(count.players)
-            .build()
-    }
-
-    private fun handleLookupPlayerNames(request: LookupPlayerNamesRequest): LookupPlayerNamesReply {
-        val playerIds =
-            request.playerIdsList
-                .asSequence()
-                .take(MAX_LOOKUP_IDS)
-                .mapNotNull(::parsePlayerId)
-                .toSet()
-        if (playerIds.isEmpty()) {
-            return LookupPlayerNamesReply.newBuilder().build()
-        }
-
-        val names = nameRepository.findNames(playerIds)
-        return LookupPlayerNamesReply.newBuilder()
-            .putAllNames(names.mapKeys { (playerId, _) -> playerId.toString() })
-            .build()
-    }
-
-    private fun toSessionInfo(session: PlayerSession): PlayerSessionInfo {
-        return PlayerSessionInfo.newBuilder()
+    private fun toSessionInfo(session: PlayerSession): PlayerSessionInfo =
+        PlayerSessionInfo.newBuilder()
             .setPlayerId(session.playerId.toString())
             .setPlayerName(session.playerName ?: "")
             .setProxyId(session.proxyId ?: "")
@@ -439,37 +260,4 @@ constructor(
             .setConnectedAtMillis(session.connectedAt.toEpochMilli())
             .setRegion(session.region ?: "")
             .build()
-    }
-
-    private fun blankToNull(value: String?): String? {
-        return value?.trim()?.takeIf { it.isNotEmpty() }
-    }
-
-    private fun parsePlayerId(value: String?): UUID? {
-        return value
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-    }
-
-    private fun isStale(session: PlayerSession, now: Instant): Boolean {
-        return session.lastSeenAt.isBefore(now.minus(sessionTtl))
-    }
-
-    companion object {
-        private val LOG = Logger.getLogger(PlayerPresenceGrpcService::class.java)
-
-        private const val MAX_SUGGEST_LIMIT = 25
-
-        /**
-         * A leaderboard page or a match's roster is at most a few dozen names; 100 is generous
-         * headroom for that without letting one call ask for an unbounded id list.
-         */
-        private const val MAX_LOOKUP_IDS = 100
-
-        /** Clamps an untrusted client-supplied limit; `<= 0` falls back to the maximum. */
-        internal fun cappedSuggestLimit(limit: Int): Int {
-            return if (limit <= 0) MAX_SUGGEST_LIMIT else min(limit, MAX_SUGGEST_LIMIT)
-        }
-    }
 }
