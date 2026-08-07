@@ -20,20 +20,10 @@ Callers authenticate with the projected workload token from
 `/var/run/secrets/grounds/token`, sent as a bearer. It is verified against the
 cluster's JWKS with the `grounds-services` audience.
 
-### Retiring gRPC
-
-The service still implements the `PlayerPresenceService` gRPC contract on the
-same port, because `plugin-player` and `plugin-match` speak it. That adapter
-holds no rules of its own — both transports call the same `PresenceService` —
-so it can be deleted once no caller needs it. The order matters:
-
-1. Release this service. It now answers on both transports.
-2. Move `plugin-player` and `plugin-match` to HTTP, and roll the proxies.
-3. Delete `gg.grounds.api`, the `quarkus-grpc` dependency, and the
-   `library-grpc-contracts-player` dependency.
-
-Doing 3 before 2 takes the network's logins down, since a proxy that cannot
-reach the presence service cannot let anyone in.
+HTTP is the only transport. The `PlayerPresenceService` gRPC adapter was
+removed once `plugin-player` (1.0.0) and `plugin-match` (0.6.0) had moved to
+REST and the proxies had been rolled onto those jars; the rules it wrapped
+always lived in `PresenceService`, which the REST resources call directly.
 
 ## Development
 
