@@ -64,12 +64,6 @@ repositories {
     }
 }
 
-// The contract is a moving SNAPSHOT, and Gradle caches changing modules for 24
-// hours by default. On a warm cache that means a contract merged and published
-// an hour ago is simply not seen: the build compiles against yesterday's proto
-// and a new RPC just silently doesn't exist. See service-match for the same fix.
-configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
-
 dependencies {
     implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.38.0"))
     implementation("io.quarkus:quarkus-arc")
@@ -78,9 +72,6 @@ dependencies {
     implementation("io.quarkus:quarkus-smallrye-openapi")
     implementation("io.quarkus:quarkus-smallrye-health")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
-    // Retained only until plugin-player and plugin-match speak HTTP; the gRPC
-    // service is a thin adapter over the same code the REST resources call.
-    implementation("io.quarkus:quarkus-grpc")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
@@ -89,7 +80,6 @@ dependencies {
     implementation("io.quarkus:quarkus-opentelemetry")
     // Prometheus metrics on /q/metrics — JVM, HTTP and the Agroal pool.
     implementation("io.quarkus:quarkus-micrometer-registry-prometheus")
-    implementation("gg.grounds:library-grpc-contracts-player:0.7.0")
     // Access classes for reads against the EU-resident database. Pinned to a
     // release rather than a SNAPSHOT: what may be served stale is a decision,
     // and a decision should not change because someone merged to main.
@@ -98,22 +88,11 @@ dependencies {
     // JWT validation for incoming calls (v2.2 Service Architecture).
     implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")
 
-    compileOnly("com.google.protobuf:protobuf-kotlin")
-
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.quarkus:quarkus-junit5-mockito")
     testImplementation("io.rest-assured:rest-assured")
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.3.0")
 }
-
-sourceSets { main { java { srcDirs("build/classes/java/quarkus-generated-sources/grpc") } } }
-
-tasks
-    .matching { it.name == "kaptGenerateStubsKotlin" }
-    .configureEach {
-        dependsOn("quarkusGenerateCode")
-        dependsOn("quarkusGenerateCodeDev")
-    }
 
 tasks.processResources {
     val projectVersion = version.toString()
