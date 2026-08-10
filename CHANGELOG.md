@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/groundsgg/service-player/compare/v1.0.0...v1.1.0) (2026-08-10)
+
+
+### Features
+
+* **loadouts:** store a player's customised kit per game mode ([#106](https://github.com/groundsgg/service-player/issues/106)) ([647f676](https://github.com/groundsgg/service-player/commit/647f67686d656826407ef08d031ab4715001ae92))
+
 ## [1.0.0](https://github.com/groundsgg/service-player/compare/v0.9.0...v1.0.0) (2026-08-07)
 
 
