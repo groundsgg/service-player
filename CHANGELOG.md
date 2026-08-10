@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/groundsgg/service-player/compare/v0.9.0...v1.0.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** drop the PlayerPresenceService gRPC adapter ([#103](https://github.com/groundsgg/service-player/issues/103))
+
+### Features
+
+* **api:** drop the PlayerPresenceService gRPC adapter ([#103](https://github.com/groundsgg/service-player/issues/103)) ([95f9263](https://github.com/groundsgg/service-player/commit/95f9263887545249c1a231df416393b406925fb9))
+
 ## [0.9.0](https://github.com/groundsgg/service-player/compare/v0.8.0...v0.9.0) (2026-08-04)
 
 
