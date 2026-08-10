@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/groundsgg/service-player/compare/v1.1.0...v2.0.0) (2026-08-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* drop per-player loadout storage ([#108](https://github.com/groundsgg/service-player/issues/108))
+
+### Features
+
+* drop per-player loadout storage ([#108](https://github.com/groundsgg/service-player/issues/108)) ([aa5a4d0](https://github.com/groundsgg/service-player/commit/aa5a4d03f611295a9cdec0028742c86dd9edf01f))
+
 ## [1.1.0](https://github.com/groundsgg/service-player/compare/v1.0.0...v1.1.0) (2026-08-10)
 
 
