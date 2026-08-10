@@ -1,0 +1,15 @@
+-- Kits are fixed, so there is nothing per player to store.
+--
+-- The duel gamemode let players rearrange the kit they fought with and kept the
+-- arrangement here. That was only ever a layout preference — the validation
+-- never allowed an item or an enchantment the kit did not grant — and the mode
+-- now hands every player the same kit, so nothing reads or writes this table.
+--
+-- V6 is deliberately left in place rather than deleted: Flyway validates the
+-- checksum of every migration it has already applied, so removing one fails the
+-- boot of every environment that ran it. Adding the inverse is the only way to
+-- undo a migration that has shipped.
+--
+-- Dropping rather than leaving it empty: an unused table with a player_id column
+-- is a thing to explain in the next audit, and the data has no second reader.
+DROP TABLE IF EXISTS player_loadout;
