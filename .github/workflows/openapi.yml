@@ -14,7 +14,10 @@ jobs:
   export-openapi:
     if: >-
       github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
-    runs-on: arc-dind
+    # Was arc-dind. The self-hosted ARC scale sets were decommissioned, so
+    # nothing serves that label and jobs would queue until timeout. This job
+    # is a plain Gradle build with no container runtime in its tests.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Check out source
