@@ -76,7 +76,7 @@ dependencies {
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
     implementation("io.quarkus:quarkus-scheduler")
-    implementation("io.nats:jnats:2.26.0")
+    implementation("io.nats:jnats:2.26.2")
     implementation("io.quarkus:quarkus-opentelemetry")
     // Prometheus metrics on /q/metrics — JVM, HTTP and the Agroal pool.
     implementation("io.quarkus:quarkus-micrometer-registry-prometheus")
