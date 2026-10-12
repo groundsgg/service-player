@@ -241,6 +241,23 @@ constructor(
     }
 
     /**
+     * A player's preferred region code. Null when none is set; a read failure resolves to null too,
+     * like [getLocale].
+     */
+    fun getPreferredRegion(playerId: String?): String? =
+        parsePlayerId(playerId)?.let(nameRepository::getPreferredRegion)
+
+    /**
+     * Stores a preferred region against the durable player row. A null or blank value clears it.
+     * The caller has already checked the code's shape; membership in the region catalogue is not
+     * checked here — that catalogue lives with the proxies.
+     */
+    fun setPreferredRegion(playerId: String?, region: String?): Boolean {
+        val id = parsePlayerId(playerId) ?: return false
+        return nameRepository.setPreferredRegion(id, blankToNull(region))
+    }
+
+    /**
      * The outcomes carry no wording for a malformed request: each transport names the offending
      * field the way its own contract spells it (`player_id` on the wire, `playerId` in JSON), and a
      * shared string would have to be right for both.

@@ -19,11 +19,15 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.reset
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
-/** Names, counts and locale — everything that outlives or aggregates over a single session. */
+/**
+ * Names, counts, locale and region — everything that outlives or aggregates over a single session.
+ */
 @QuarkusTest
 class PlayerDirectoryResourceTest {
 
@@ -200,5 +204,98 @@ class PlayerDirectoryResourceTest {
     @Test
     fun `a malformed id in the path is a bad request, not a miss`() {
         given().get("/v1/players/not-a-uuid/locale").then().statusCode(400)
+    }
+
+    @Test
+    fun `an unset region reads as null rather than 404`() {
+        whenever(nameRepository.getPreferredRegion(playerId)).thenReturn(null)
+
+        given()
+            .get("/v1/players/$playerId/region")
+            .then()
+            .statusCode(200)
+            .body("region", nullValue())
+    }
+
+    @Test
+    fun `a stored region is read back`() {
+        whenever(nameRepository.getPreferredRegion(playerId)).thenReturn("eu")
+
+        given()
+            .get("/v1/players/$playerId/region")
+            .then()
+            .statusCode(200)
+            .body("region", equalTo("eu"))
+    }
+
+    @Test
+    fun `storing a region writes it against the durable player row`() {
+        whenever(nameRepository.setPreferredRegion(playerId, "eu")).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(mapOf("region" to "eu"))
+            .put("/v1/players/$playerId/region")
+            .then()
+            .statusCode(204)
+    }
+
+    @Test
+    fun `a blank region clears the preference`() {
+        whenever(nameRepository.setPreferredRegion(playerId, null)).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(mapOf("region" to "  "))
+            .put("/v1/players/$playerId/region")
+            .then()
+            .statusCode(204)
+
+        verify(nameRepository).setPreferredRegion(playerId, null)
+    }
+
+    @Test
+    fun `a null region clears the preference`() {
+        whenever(nameRepository.setPreferredRegion(playerId, null)).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"region":null}""")
+            .put("/v1/players/$playerId/region")
+            .then()
+            .statusCode(204)
+
+        verify(nameRepository).setPreferredRegion(playerId, null)
+    }
+
+    @Test
+    fun `a malformed region is a bad request and never hits the store`() {
+        listOf("EU", "eu west", "eu_west", "a".repeat(33)).forEach { region ->
+            given()
+                .contentType(ContentType.JSON)
+                .body(mapOf("region" to region))
+                .put("/v1/players/$playerId/region")
+                .then()
+                .statusCode(400)
+        }
+
+        verify(nameRepository, never()).setPreferredRegion(any(), anyOrNull())
+    }
+
+    @Test
+    fun `a region for a player this service has never seen is 404`() {
+        whenever(nameRepository.setPreferredRegion(playerId, "na")).thenReturn(false)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(mapOf("region" to "na"))
+            .put("/v1/players/$playerId/region")
+            .then()
+            .statusCode(404)
+    }
+
+    @Test
+    fun `a malformed id in the region path is a bad request`() {
+        given().get("/v1/players/not-a-uuid/region").then().statusCode(400)
     }
 }

@@ -210,3 +210,23 @@ data class SetLocaleRequest(
     )
     val locale: String? = null
 )
+
+@Schema(name = "PlayerRegion", description = "A player's preferred (default) region.")
+data class RegionResponse(
+    @get:Schema(
+        description = "Region-catalogue code. Null when the player has never chosen one.",
+        examples = ["eu"],
+    )
+    val region: String?
+)
+
+@Schema(name = "SetRegionRequest", description = "Store or clear a preferred region.")
+data class SetRegionRequest(
+    @get:Schema(
+        description =
+            "The region code to store; null or blank clears the preference. Must match " +
+                "`[a-z0-9-]{1,32}`. Membership in the region catalogue is not checked.",
+        examples = ["eu"],
+    )
+    val region: String? = null
+)

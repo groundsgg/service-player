@@ -105,6 +105,7 @@ class WorkloadAuthFilterTest {
                 "v1/players/counts/proxies",
                 "v1/players/8f3a1c2e-4b5d-4e6f-8a9b-0c1d2e3f4a5b/session",
                 "v1/players/8f3a1c2e-4b5d-4e6f-8a9b-0c1d2e3f4a5b/locale",
+                "v1/players/8f3a1c2e-4b5d-4e6f-8a9b-0c1d2e3f4a5b/region",
             )
             .forEach { path ->
                 val context = requestContext(path, authorization = null)
