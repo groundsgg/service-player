@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/groundsgg/service-player/compare/v2.0.0...v2.1.0) (2026-10-12)
+
+
+### Features
+
+* store a player's preferred region ([#124](https://github.com/groundsgg/service-player/issues/124)) ([192b657](https://github.com/groundsgg/service-player/commit/192b65777410c3e310cdd3fb61dc1b17196e1591))
+
 ## [2.0.0](https://github.com/groundsgg/service-player/compare/v1.1.0...v2.0.0) (2026-08-10)
 
 
