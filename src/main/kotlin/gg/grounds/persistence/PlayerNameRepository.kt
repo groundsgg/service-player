@@ -136,6 +136,55 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
         }
     }
 
+    /**
+     * The player's preferred region code, or null when they have set none (the row's
+     * `preferred_region` is NULL) or have never logged in (no row).
+     */
+    @Fresh
+    fun getPreferredRegion(playerId: UUID): String? {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_PREFERRED_REGION).use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.executeQuery().use { resultSet ->
+                        if (resultSet.next()) resultSet.getString("preferred_region") else null
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player preferred region fetch failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            null
+        }
+    }
+
+    /**
+     * Sets (or, with a null [region], clears) the player's preferred region on their durable row.
+     * Updates only, like [setLocale]: a miss (0 rows) returns false.
+     */
+    @Fresh
+    fun setPreferredRegion(playerId: UUID, region: String?): Boolean {
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(UPDATE_PREFERRED_REGION).use { statement ->
+                    statement.setString(1, region)
+                    statement.setObject(2, playerId)
+                    statement.executeUpdate() > 0
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player preferred region update failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            false
+        }
+    }
+
     companion object {
         private val LOG = Logger.getLogger(PlayerNameRepository::class.java)
 
@@ -154,5 +203,9 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
             """
         private const val SELECT_LOCALE = "SELECT locale FROM player_names WHERE player_id = ?"
         private const val UPDATE_LOCALE = "UPDATE player_names SET locale = ? WHERE player_id = ?"
+        private const val SELECT_PREFERRED_REGION =
+            "SELECT preferred_region FROM player_names WHERE player_id = ?"
+        private const val UPDATE_PREFERRED_REGION =
+            "UPDATE player_names SET preferred_region = ? WHERE player_id = ?"
     }
 }
