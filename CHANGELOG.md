@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/groundsgg/service-player/compare/v2.2.0...v2.3.0) (2026-10-17)
+
+
+### Features
+
+* **player:** track sessions per Minecraft profile ([#134](https://github.com/groundsgg/service-player/issues/134)) ([ffda05d](https://github.com/groundsgg/service-player/commit/ffda05dd7df571ed5d73692f7a03dddf7c6900cd))
+
 ## [2.2.0](https://github.com/groundsgg/service-player/compare/v2.1.0...v2.2.0) (2026-10-17)
 
 
