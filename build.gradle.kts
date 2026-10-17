@@ -86,7 +86,7 @@ dependencies {
     implementation("gg.grounds:library-data-access:0.2.0")
 
     // JWT validation for incoming calls (v2.2 Service Architecture).
-    implementation("com.nimbusds:nimbus-jose-jwt:10.9.1")
+    implementation("com.nimbusds:nimbus-jose-jwt:10.10")
 
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.quarkus:quarkus-junit5-mockito")
