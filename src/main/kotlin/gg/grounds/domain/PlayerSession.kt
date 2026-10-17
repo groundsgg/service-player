@@ -15,4 +15,6 @@ data class PlayerSession(
      * predates a rollout — "unknown" is a normal answer here, not a fault.
      */
     val region: String? = null,
+    /** Null for a session owned by a legacy v1 client. */
+    val sessionId: UUID? = null,
 )

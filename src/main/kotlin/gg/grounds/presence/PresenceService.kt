@@ -10,8 +10,11 @@ import gg.grounds.persistence.PlayerSessionRepository.ProxyPlayerCount
 import gg.grounds.persistence.PlayerSessionRepository.ServerPlayerCount
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
+import java.security.MessageDigest
+import java.security.SecureRandom
 import java.time.Duration
 import java.time.Instant
+import java.util.Base64
 import java.util.UUID
 import kotlin.math.min
 import org.eclipse.microprofile.config.inject.ConfigProperty
@@ -55,45 +58,32 @@ constructor(
 
         val now = Instant.now()
         val name = blankToNull(playerName)
-        // Written regardless of what happens below: a login rejected as already-online still
-        // came with a real id + name from the proxy, and that is all the durable index needs.
-        // Best-effort — a failure here must not block the session logic that follows.
-        if (name != null) {
-            nameRepository.upsertName(id, name, now)
-        }
-
         val session =
             PlayerSession(id, now, now, name, blankToNull(proxyId), region = blankToNull(region))
         if (repository.insertSession(session)) {
+            if (name != null) nameRepository.upsertName(id, name, now)
             LOG.infof("Player session created (playerId=%s, result=accepted)", id)
             return LoginOutcome.Accepted
         }
 
         val existing = repository.findByPlayerId(id)
         if (existing != null) {
+            if (existing.sessionId != null) {
+                LOG.infof(
+                    "Player session rejected (playerId=%s, reason=owned_by_exact_session)",
+                    id,
+                )
+                return LoginOutcome.AlreadyOnline
+            }
             val stale = existing.lastSeenAt.isBefore(now.minus(sessionTtl))
-            // A fresh session on a *different* proxy is what a proxy-to-proxy transfer looks
-            // like from here: the client reconnected before the old proxy's logout (conditional
-            // on its own proxy id, so it cannot undo this) went through. The new login wins.
-            // A login without a proxy id cannot prove it is a different proxy, so it cannot
-            // take over — only wait out the TTL, as before.
-            val takeover = session.proxyId != null && existing.proxyId != session.proxyId
-            if (stale || takeover) {
+            if (stale) {
                 if (repository.replaceSession(session)) {
-                    if (stale) {
-                        LOG.infof(
-                            "Player session expired and replaced (playerId=%s, lastSeenAt=%s)",
-                            id,
-                            existing.lastSeenAt,
-                        )
-                    } else {
-                        LOG.infof(
-                            "Player session taken over (playerId=%s, fromProxy=%s, toProxy=%s)",
-                            id,
-                            existing.proxyId,
-                            session.proxyId,
-                        )
-                    }
+                    if (name != null) nameRepository.upsertName(id, name, now)
+                    LOG.infof(
+                        "Player session expired and replaced (playerId=%s, lastSeenAt=%s)",
+                        id,
+                        existing.lastSeenAt,
+                    )
                     return LoginOutcome.Accepted
                 }
                 LOG.errorf(
@@ -109,6 +99,123 @@ constructor(
 
         LOG.errorf("Player session verification failed (playerId=%s)", id)
         return LoginOutcome.Failed("unable to verify player session")
+    }
+
+    fun claimExactSession(
+        playerId: String?,
+        sessionId: String?,
+        playerName: String?,
+        proxyId: String?,
+        region: String?,
+    ): ExactSessionClaimOutcome {
+        val id = parsePlayerId(playerId) ?: return ExactSessionClaimOutcome.InvalidId
+        val connectionId = parsePlayerId(sessionId) ?: return ExactSessionClaimOutcome.InvalidId
+        val now = Instant.now()
+        val name = blankToNull(playerName)
+        val session =
+            PlayerSession(
+                playerId = id,
+                connectedAt = now,
+                lastSeenAt = now,
+                playerName = name,
+                proxyId = blankToNull(proxyId),
+                region = blankToNull(region),
+                sessionId = connectionId,
+            )
+        return when (repository.claimSession(session, now.minus(sessionTtl))) {
+            PlayerSessionRepository.ClaimSessionResult.Claimed -> {
+                if (name != null) nameRepository.upsertName(id, name, now)
+                ExactSessionClaimOutcome.Accepted(id, connectionId, now.plus(sessionTtl))
+            }
+            PlayerSessionRepository.ClaimSessionResult.AlreadyOnline ->
+                ExactSessionClaimOutcome.AlreadyOnline
+            PlayerSessionRepository.ClaimSessionResult.Error ->
+                ExactSessionClaimOutcome.Failed("unable to claim player session")
+        }
+    }
+
+    fun logoutExactSession(playerId: String?, sessionId: String?): LogoutOutcome {
+        val id = parsePlayerId(playerId) ?: return LogoutOutcome.InvalidPlayerId
+        val connectionId = parsePlayerId(sessionId) ?: return LogoutOutcome.InvalidPlayerId
+        return when (repository.deleteSessionForSession(id, connectionId)) {
+            DeleteSessionResult.REMOVED -> LogoutOutcome.Removed
+            DeleteSessionResult.NOT_FOUND -> LogoutOutcome.NotFound
+            DeleteSessionResult.ERROR -> LogoutOutcome.Failed("unable to remove player session")
+        }
+    }
+
+    fun updateServerExactSession(
+        playerId: String?,
+        sessionId: String?,
+        serverName: String?,
+    ): Boolean {
+        val id = parsePlayerId(playerId) ?: return false
+        val connectionId = parsePlayerId(sessionId) ?: return false
+        val server = blankToNull(serverName) ?: return false
+        return repository.updateServerForSession(id, connectionId, server)
+    }
+
+    fun issueSessionHandoff(playerId: String?, sessionId: String?): HandoffIssueOutcome {
+        val id = parsePlayerId(playerId) ?: return HandoffIssueOutcome.InvalidId
+        val connectionId = parsePlayerId(sessionId) ?: return HandoffIssueOutcome.InvalidId
+        val now = Instant.now()
+        val expiresAt = now.plus(HANDOFF_TTL)
+        val randomBytes = ByteArray(HANDOFF_TOKEN_BYTES).also(SECURE_RANDOM::nextBytes)
+        val token = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes)
+        return when (
+            repository.createHandoff(
+                playerId = id,
+                sessionId = connectionId,
+                tokenHash = hashHandoffToken(token),
+                expiresAt = expiresAt,
+                activeAfter = now.minus(sessionTtl),
+            )
+        ) {
+            PlayerSessionRepository.CreateHandoffResult.Created ->
+                HandoffIssueOutcome.Issued(token, expiresAt)
+            PlayerSessionRepository.CreateHandoffResult.NoActiveSession ->
+                HandoffIssueOutcome.NoActiveSession
+            PlayerSessionRepository.CreateHandoffResult.Error ->
+                HandoffIssueOutcome.Failed("unable to create session handoff")
+        }
+    }
+
+    fun consumeSessionHandoff(
+        playerId: String?,
+        sessionId: String?,
+        handoffToken: String?,
+        playerName: String?,
+        proxyId: String?,
+        region: String?,
+    ): ExactSessionClaimOutcome {
+        val id = parsePlayerId(playerId) ?: return ExactSessionClaimOutcome.InvalidId
+        val connectionId = parsePlayerId(sessionId) ?: return ExactSessionClaimOutcome.InvalidId
+        val token =
+            handoffToken?.takeIf(HANDOFF_TOKEN_PATTERN::matches)
+                ?: return ExactSessionClaimOutcome.InvalidId
+        val now = Instant.now()
+        val name = blankToNull(playerName)
+        return when (
+            repository.consumeHandoff(
+                tokenHash = hashHandoffToken(token),
+                playerId = id,
+                sessionId = connectionId,
+                playerName = name,
+                proxyId = blankToNull(proxyId),
+                region = blankToNull(region),
+                now = now,
+                activeAfter = now.minus(sessionTtl),
+            )
+        ) {
+            PlayerSessionRepository.ConsumeHandoffResult.Consumed -> {
+                if (name != null) nameRepository.upsertName(id, name, now)
+                ExactSessionClaimOutcome.Accepted(id, connectionId, now.plus(sessionTtl))
+            }
+            PlayerSessionRepository.ConsumeHandoffResult.NotFound ->
+                ExactSessionClaimOutcome.AlreadyOnline
+            PlayerSessionRepository.ConsumeHandoffResult.Error ->
+                ExactSessionClaimOutcome.Failed("unable to consume session handoff")
+        }
     }
 
     /**
@@ -272,6 +379,27 @@ constructor(
         data class Failed(val message: String) : LoginOutcome
     }
 
+    sealed interface ExactSessionClaimOutcome {
+        data class Accepted(val playerId: UUID, val sessionId: UUID, val leaseExpiresAt: Instant) :
+            ExactSessionClaimOutcome
+
+        data object AlreadyOnline : ExactSessionClaimOutcome
+
+        data object InvalidId : ExactSessionClaimOutcome
+
+        data class Failed(val message: String) : ExactSessionClaimOutcome
+    }
+
+    sealed interface HandoffIssueOutcome {
+        data class Issued(val token: String, val expiresAt: Instant) : HandoffIssueOutcome
+
+        data object NoActiveSession : HandoffIssueOutcome
+
+        data object InvalidId : HandoffIssueOutcome
+
+        data class Failed(val message: String) : HandoffIssueOutcome
+    }
+
     sealed interface LogoutOutcome {
         data object Removed : LogoutOutcome
 
@@ -290,6 +418,10 @@ constructor(
     class PresenceUnavailableException : RuntimeException("player session count is unavailable")
 
     companion object {
+        private const val HANDOFF_TOKEN_BYTES = 32
+        private val HANDOFF_TTL = Duration.ofSeconds(15)
+        private val HANDOFF_TOKEN_PATTERN = Regex("[A-Za-z0-9_-]{43}")
+        private val SECURE_RANDOM = SecureRandom()
         private val LOG = Logger.getLogger(PresenceService::class.java)
 
         private const val MAX_SUGGEST_LIMIT = 25
@@ -309,5 +441,8 @@ constructor(
 
         internal fun parsePlayerId(value: String?): UUID? =
             blankToNull(value)?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+
+        private fun hashHandoffToken(token: String): ByteArray =
+            MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.US_ASCII))
     }
 }

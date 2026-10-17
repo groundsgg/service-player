@@ -17,6 +17,32 @@ import org.jboss.logging.Logger
 @ApplicationScoped
 class PlayerHeartbeatService @Inject constructor(private val repository: PlayerSessionRepository) {
 
+    data class SessionIdentity(val playerId: String, val sessionId: String)
+
+    fun handleExactSessionHeartbeatBatch(sessions: List<SessionIdentity>): HeartbeatOutcome {
+        if (sessions.isEmpty()) return HeartbeatOutcome.Rejected(HeartbeatOutcome.Reason.EMPTY)
+        val parsed = sessions.map { entry ->
+            val playerId = runCatching { UUID.fromString(entry.playerId.trim()) }.getOrNull()
+            val sessionId = runCatching { UUID.fromString(entry.sessionId.trim()) }.getOrNull()
+            if (playerId == null || sessionId == null) null else playerId to sessionId
+        }
+        if (parsed.any { it == null }) {
+            return HeartbeatOutcome.Rejected(HeartbeatOutcome.Reason.INVALID_PLAYER_IDS)
+        }
+        val identities = parsed.filterNotNull().distinct()
+        return when (val result = repository.touchSessionsForIds(identities, Instant.now())) {
+            is TouchSessionsResult.Updated -> {
+                val missing = (identities.size - result.count).coerceAtLeast(0)
+                HeartbeatOutcome.Accepted(result.count, missing)
+            }
+            TouchSessionsResult.Error ->
+                HeartbeatOutcome.Failed(
+                    missing = identities.size,
+                    message = "unable to update player sessions",
+                )
+        }
+    }
+
     /**
      * Touches every session named in [playerIds].
      *

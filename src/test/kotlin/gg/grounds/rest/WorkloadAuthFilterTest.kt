@@ -99,6 +99,10 @@ class WorkloadAuthFilterTest {
         listOf(
                 "v1/players/sessions",
                 "/v1/players/sessions",
+                "v2/players/sessions",
+                "/v2/players/sessions",
+                "v2/players/sessions/heartbeats",
+                "v2/players/123/session/transfer",
                 "v1/players/sessions/heartbeats",
                 "v1/players/names",
                 "v1/players/names/suggestions",
