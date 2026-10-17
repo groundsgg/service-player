@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/groundsgg/service-player/compare/v2.1.0...v2.2.0) (2026-10-17)
+
+
+### Features
+
+* **db:** run Flyway on a direct migrations datasource ([#133](https://github.com/groundsgg/service-player/issues/133)) ([44ffb0f](https://github.com/groundsgg/service-player/commit/44ffb0ff50dd6c4495d93bcb23f0ed4424beacef))
+
+
+### Bug Fixes
+
+* **build:** resolve dependencies through the runner mirror in Docker builds ([#126](https://github.com/groundsgg/service-player/issues/126)) ([1bf4ad7](https://github.com/groundsgg/service-player/commit/1bf4ad745ef417f7f0140c0d85c224cc65aadf5c))
+
 ## [2.1.0](https://github.com/groundsgg/service-player/compare/v2.0.0...v2.1.0) (2026-10-12)
 
 
