@@ -92,6 +92,7 @@ dependencies {
     testImplementation("io.quarkus:quarkus-junit5-mockito")
     testImplementation("io.rest-assured:rest-assured")
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.3.0")
+    testImplementation("org.testcontainers:postgresql:1.21.4")
 }
 
 tasks.processResources {

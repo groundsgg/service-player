@@ -92,6 +92,43 @@ data class HeartbeatRequest(
     val playerIds: List<String> = emptyList()
 )
 
+@Schema(name = "ExactSessionClaimRequest", description = "Claim a connection-owned player session.")
+data class ExactSessionClaimRequest(
+    val playerId: String?,
+    val sessionId: String?,
+    val playerName: String? = null,
+    val proxyId: String? = null,
+    val region: String? = null,
+)
+
+@Schema(name = "ExactSessionClaimResponse", description = "The admitted connection and lease.")
+data class ExactSessionClaimResponse(
+    val playerId: String,
+    val sessionId: String,
+    val leaseExpiresAt: Instant,
+)
+
+data class ExactSessionHeartbeatEntry(val playerId: String?, val sessionId: String?)
+
+data class ExactSessionHeartbeatRequest(
+    val sessions: List<ExactSessionHeartbeatEntry> = emptyList()
+)
+
+data class ExactSessionServerRequest(val sessionId: String?, val serverName: String?)
+
+data class ExactSessionHandoffIssueRequest(val sessionId: String?)
+
+data class ExactSessionHandoffIssueResponse(val token: String, val expiresAt: Instant)
+
+data class ExactSessionHandoffConsumeRequest(
+    val playerId: String?,
+    val sessionId: String?,
+    val handoffToken: String?,
+    val playerName: String? = null,
+    val proxyId: String? = null,
+    val region: String? = null,
+)
+
 @Schema(name = "HeartbeatResponse", description = "What the batch did.")
 data class HeartbeatResponse(
     @get:Schema(description = "Sessions touched.") val updated: Int,

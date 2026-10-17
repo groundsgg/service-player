@@ -28,7 +28,7 @@ class WorkloadAuthFilter @Inject constructor(private val authenticator: Workload
 
     override fun filter(requestContext: ContainerRequestContext) {
         val path = requestContext.uriInfo.path
-        if (!path.startsWith(GUARDED_PREFIX) && !path.startsWith("/$GUARDED_PREFIX")) return
+        if (GUARDED_PREFIXES.none { path.startsWith(it) || path.startsWith("/$it") }) return
 
         if (!authenticator.enabled) {
             // Local runs and tests, where no kubelet projects a token. Never true in-cluster.
@@ -91,6 +91,6 @@ class WorkloadAuthFilter @Inject constructor(private val authenticator: Workload
 
     companion object {
         private val LOG = Logger.getLogger(WorkloadAuthFilter::class.java)
-        private const val GUARDED_PREFIX = "v1/players"
+        private val GUARDED_PREFIXES = listOf("v1/players", "v2/players")
     }
 }

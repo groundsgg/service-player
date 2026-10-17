@@ -73,7 +73,7 @@ class PlayerSessionResourceTest {
     }
 
     @Test
-    fun `a login from a different proxy takes the session over`() {
+    fun `a login from a different proxy cannot take over a fresh legacy session`() {
         whenever(repository.insertSession(any())).thenReturn(false)
         whenever(repository.findByPlayerId(playerId)).thenReturn(session(proxyId = "velocity-1"))
         whenever(repository.replaceSession(any())).thenReturn(true)
@@ -83,7 +83,9 @@ class PlayerSessionResourceTest {
             .body(mapOf("playerId" to playerId.toString(), "proxyId" to "velocity-2"))
             .post("/v1/players/sessions")
             .then()
-            .statusCode(201)
+            .statusCode(409)
+
+        verify(repository, org.mockito.kotlin.never()).replaceSession(any())
     }
 
     @Test
@@ -97,6 +99,25 @@ class PlayerSessionResourceTest {
             .body("code", equalTo("invalid_request"))
 
         verifyNoInteractions(repository)
+    }
+
+    @Test
+    fun `v2 admission fails closed when the session store is unavailable`() {
+        whenever(repository.claimSession(any(), any()))
+            .thenReturn(PlayerSessionRepository.ClaimSessionResult.Error)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(
+                mapOf(
+                    "playerId" to playerId.toString(),
+                    "sessionId" to UUID.randomUUID().toString(),
+                )
+            )
+            .post("/v2/players/sessions")
+            .then()
+            .statusCode(503)
+            .body("code", equalTo("store_unavailable"))
     }
 
     @Test

@@ -27,9 +27,155 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         data object Error : TouchSessionsResult
     }
 
+    sealed interface ClaimSessionResult {
+        data object Claimed : ClaimSessionResult
+
+        data object AlreadyOnline : ClaimSessionResult
+
+        data object Error : ClaimSessionResult
+    }
+
+    sealed interface CreateHandoffResult {
+        data object Created : CreateHandoffResult
+
+        data object NoActiveSession : CreateHandoffResult
+
+        data object Error : CreateHandoffResult
+    }
+
+    sealed interface ConsumeHandoffResult {
+        data object Consumed : ConsumeHandoffResult
+
+        data object NotFound : ConsumeHandoffResult
+
+        data object Error : ConsumeHandoffResult
+    }
+
     data class ServerPlayerCount(val serverName: String, val players: Int)
 
     data class ProxyPlayerCount(val proxyId: String, val region: String?, val players: Int)
+
+    @Fresh
+    fun claimSession(session: PlayerSession, staleBefore: Instant): ClaimSessionResult {
+        val sessionId = session.sessionId ?: return ClaimSessionResult.Error
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(CLAIM_SESSION).use { statement ->
+                    statement.setObject(1, session.playerId)
+                    statement.setTimestamp(2, Timestamp.from(session.connectedAt))
+                    statement.setTimestamp(3, Timestamp.from(session.lastSeenAt))
+                    statement.setString(4, session.playerName)
+                    statement.setString(5, session.proxyId)
+                    statement.setString(6, session.serverName)
+                    statement.setString(7, session.region)
+                    statement.setObject(8, sessionId)
+                    statement.setTimestamp(9, Timestamp.from(staleBefore))
+                    if (statement.executeUpdate() > 0) ClaimSessionResult.Claimed
+                    else ClaimSessionResult.AlreadyOnline
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session claim failed (playerId=%s, reason=sql_error)",
+                session.playerId,
+            )
+            ClaimSessionResult.Error
+        }
+    }
+
+    @Fresh
+    fun createHandoff(
+        playerId: UUID,
+        sessionId: UUID,
+        tokenHash: ByteArray,
+        expiresAt: Instant,
+        activeAfter: Instant,
+    ): CreateHandoffResult =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(INSERT_HANDOFF_FOR_SESSION).use { statement ->
+                    statement.setBytes(1, tokenHash)
+                    statement.setTimestamp(2, Timestamp.from(expiresAt))
+                    statement.setObject(3, playerId)
+                    statement.setObject(4, sessionId)
+                    statement.setTimestamp(5, Timestamp.from(activeAfter))
+                    when (statement.executeUpdate()) {
+                        1 -> CreateHandoffResult.Created
+                        else -> CreateHandoffResult.NoActiveSession
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player handoff creation failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            CreateHandoffResult.Error
+        }
+
+    @Fresh
+    fun consumeHandoff(
+        tokenHash: ByteArray,
+        playerId: UUID,
+        sessionId: UUID,
+        playerName: String?,
+        proxyId: String?,
+        region: String?,
+        now: Instant,
+        activeAfter: Instant,
+    ): ConsumeHandoffResult =
+        try {
+            dataSource.connection.use { connection ->
+                connection.autoCommit = false
+                try {
+                    val sourceSessionId =
+                        connection.prepareStatement(CONSUME_HANDOFF).use { statement ->
+                            statement.setTimestamp(1, Timestamp.from(now))
+                            statement.setBytes(2, tokenHash)
+                            statement.setObject(3, playerId)
+                            statement.setTimestamp(4, Timestamp.from(now))
+                            statement.executeQuery().use { resultSet ->
+                                if (resultSet.next()) {
+                                    resultSet.getObject("source_session_id", UUID::class.java)
+                                } else null
+                            }
+                        }
+                    if (sourceSessionId == null) {
+                        connection.rollback()
+                        return@use ConsumeHandoffResult.NotFound
+                    }
+
+                    val updated =
+                        connection.prepareStatement(CONSUME_SESSION_HANDOFF).use { statement ->
+                            statement.setTimestamp(1, Timestamp.from(now))
+                            statement.setTimestamp(2, Timestamp.from(now))
+                            statement.setString(3, playerName)
+                            statement.setString(4, proxyId)
+                            statement.setString(5, region)
+                            statement.setObject(6, sessionId)
+                            statement.setObject(7, playerId)
+                            statement.setObject(8, sourceSessionId)
+                            statement.setTimestamp(9, Timestamp.from(activeAfter))
+                            statement.setObject(10, sessionId)
+                            statement.executeUpdate()
+                        }
+                    if (updated != 1) {
+                        connection.rollback()
+                        return@use ConsumeHandoffResult.NotFound
+                    }
+                    connection.commit()
+                    ConsumeHandoffResult.Consumed
+                } catch (error: SQLException) {
+                    connection.rollback()
+                    throw error
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(error, "Player handoff consumption failed (reason=sql_error)")
+            ConsumeHandoffResult.Error
+        }
 
     sealed interface CountPlayersByServerResult {
         data class Counted(val servers: List<ServerPlayerCount>, val total: Int) :
@@ -204,6 +350,46 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
     }
 
     @Fresh
+    fun updateServerForSession(playerId: UUID, sessionId: UUID, serverName: String): Boolean =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(UPDATE_SERVER_FOR_SESSION).use { statement ->
+                    statement.setString(1, serverName)
+                    statement.setObject(2, playerId)
+                    statement.setObject(3, sessionId)
+                    statement.executeUpdate() > 0
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session server update failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            false
+        }
+
+    @Fresh
+    fun deleteSessionForSession(playerId: UUID, sessionId: UUID): DeleteSessionResult =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(DELETE_BY_PLAYER_AND_SESSION).use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.setObject(2, sessionId)
+                    if (statement.executeUpdate() > 0) DeleteSessionResult.REMOVED
+                    else DeleteSessionResult.NOT_FOUND
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session delete failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            DeleteSessionResult.ERROR
+        }
+
+    @Fresh
     fun deleteSession(playerId: UUID): DeleteSessionResult {
         return try {
             dataSource.connection.use { connection ->
@@ -272,6 +458,37 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 error,
                 "Player session batch update failed (count=%d, reason=sql_error)",
                 playerIds.size,
+            )
+            TouchSessionsResult.Error
+        }
+    }
+
+    @Fresh
+    fun touchSessionsForIds(
+        sessions: Collection<Pair<UUID, UUID>>,
+        lastSeenAt: Instant,
+    ): TouchSessionsResult {
+        if (sessions.isEmpty()) return TouchSessionsResult.Updated(0)
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(UPDATE_LAST_SEEN_BY_SESSION_BATCH).use { statement ->
+                    statement.setTimestamp(1, Timestamp.from(lastSeenAt))
+                    statement.setArray(
+                        2,
+                        connection.createArrayOf("uuid", sessions.map { it.first }.toTypedArray()),
+                    )
+                    statement.setArray(
+                        3,
+                        connection.createArrayOf("uuid", sessions.map { it.second }.toTypedArray()),
+                    )
+                    TouchSessionsResult.Updated(statement.executeUpdate())
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session heartbeat failed (count=%d, reason=sql_error)",
+                sessions.size,
             )
             TouchSessionsResult.Error
         }
@@ -390,6 +607,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             resultSet.getString("proxy_id"),
             resultSet.getString("server_name"),
             resultSet.getString("region"),
+            resultSet.getObject("session_id", UUID::class.java),
         )
     }
 
@@ -404,13 +622,13 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             """
         private const val SELECT_BY_PLAYER =
             """
-            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region
+            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region, session_id
             FROM player_sessions
             WHERE player_id = ?
             """
         private const val SELECT_BY_NAME =
             """
-            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region
+            SELECT player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region, session_id
             FROM player_sessions
             WHERE lower(player_name) = lower(?)
             """
@@ -443,7 +661,58 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             """
             UPDATE player_sessions
             SET server_name = ?
-            WHERE player_id = ?
+            WHERE player_id = ? AND session_id IS NULL
+            """
+        private const val UPDATE_SERVER_FOR_SESSION =
+            """
+            UPDATE player_sessions
+            SET server_name = ?
+            WHERE player_id = ? AND session_id = ?
+            """
+        private const val DELETE_BY_PLAYER_AND_SESSION =
+            """
+            DELETE FROM player_sessions
+            WHERE player_id = ? AND session_id = ?
+            """
+        private const val CLAIM_SESSION =
+            """
+            INSERT INTO player_sessions (player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (player_id) DO UPDATE
+            SET connected_at = CASE
+                    WHEN player_sessions.session_id = EXCLUDED.session_id THEN player_sessions.connected_at
+                    ELSE EXCLUDED.connected_at
+                END,
+                last_seen_at = EXCLUDED.last_seen_at,
+                player_name = EXCLUDED.player_name,
+                proxy_id = EXCLUDED.proxy_id,
+                server_name = EXCLUDED.server_name,
+                region = EXCLUDED.region,
+                session_id = EXCLUDED.session_id
+            WHERE player_sessions.session_id = EXCLUDED.session_id
+               OR player_sessions.last_seen_at < ?
+            """
+        private const val INSERT_HANDOFF_FOR_SESSION =
+            """
+            INSERT INTO player_session_handoffs (token_hash, player_id, source_session_id, expires_at)
+            SELECT ?, player_id, session_id, ?
+            FROM player_sessions
+            WHERE player_id = ? AND session_id = ? AND last_seen_at >= ?
+            """
+        private const val CONSUME_HANDOFF =
+            """
+            UPDATE player_session_handoffs
+            SET consumed_at = ?
+            WHERE token_hash = ? AND player_id = ? AND consumed_at IS NULL AND expires_at > ?
+            RETURNING source_session_id
+            """
+        private const val CONSUME_SESSION_HANDOFF =
+            """
+            UPDATE player_sessions
+            SET connected_at = ?, last_seen_at = ?, player_name = ?, proxy_id = ?, server_name = NULL,
+                region = ?, session_id = ?
+            WHERE player_id = ? AND session_id = ? AND last_seen_at >= ?
+              AND session_id <> ?
             """
         private const val REPLACE_SESSION =
             """
@@ -456,22 +725,31 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 proxy_id = EXCLUDED.proxy_id,
                 server_name = EXCLUDED.server_name,
                 region = EXCLUDED.region
+            WHERE player_sessions.session_id IS NULL
             """
         private const val DELETE_BY_PLAYER =
             """
             DELETE FROM player_sessions
-            WHERE player_id = ?
+            WHERE player_id = ? AND session_id IS NULL
             """
         private const val DELETE_BY_PLAYER_AND_PROXY =
             """
             DELETE FROM player_sessions
-            WHERE player_id = ? AND proxy_id = ?
+            WHERE player_id = ? AND proxy_id = ? AND session_id IS NULL
             """
         private const val UPDATE_LAST_SEEN_BATCH =
             """
             UPDATE player_sessions
             SET last_seen_at = ?
-            WHERE player_id = ANY(?)
+            WHERE player_id = ANY(?) AND session_id IS NULL
+            """
+        private const val UPDATE_LAST_SEEN_BY_SESSION_BATCH =
+            """
+            UPDATE player_sessions AS current
+            SET last_seen_at = ?
+            FROM unnest(?::uuid[], ?::uuid[]) AS requested(player_id, session_id)
+            WHERE current.player_id = requested.player_id
+              AND current.session_id = requested.session_id
             """
         private const val DELETE_STALE =
             """
