@@ -2,12 +2,15 @@ package gg.grounds.presence
 
 import gg.grounds.domain.PlayerSession
 import gg.grounds.persistence.PlayerNameRepository
+import gg.grounds.persistence.PlayerNameRepository.Setting
 import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByProxyResult
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import gg.grounds.persistence.PlayerSessionRepository.ProxyPlayerCount
 import gg.grounds.persistence.PlayerSessionRepository.ServerPlayerCount
+import gg.grounds.settings.PlayerSettingsCache
+import gg.grounds.settings.SettingsInvalidations
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.security.MessageDigest
@@ -38,6 +41,9 @@ class PresenceService
 constructor(
     private val repository: PlayerSessionRepository,
     private val nameRepository: PlayerNameRepository,
+    private val writes: PlayerWrites,
+    private val settingsCache: PlayerSettingsCache,
+    private val settingsInvalidations: SettingsInvalidations,
 ) {
     @ConfigProperty(name = "grounds.player.sessions.ttl", defaultValue = "90s")
     private lateinit var sessionTtl: Duration
@@ -122,9 +128,19 @@ constructor(
                 region = blankToNull(region),
                 sessionId = connectionId,
             )
-        return when (repository.claimSession(session, now.minus(sessionTtl))) {
+        val claimed =
+            if (writes.asyncWrites) {
+                repository.claimSessionAsync(
+                    session,
+                    now.minus(sessionTtl),
+                    writes.endedSessions(id),
+                )
+            } else {
+                repository.claimSession(session, now.minus(sessionTtl))
+            }
+        return when (claimed) {
             PlayerSessionRepository.ClaimSessionResult.Claimed -> {
-                if (name != null) nameRepository.upsertName(id, name, now)
+                if (name != null) recordName(id, connectionId, name, now)
                 ExactSessionClaimOutcome.Accepted(id, connectionId, now.plus(sessionTtl))
             }
             PlayerSessionRepository.ClaimSessionResult.AlreadyOnline ->
@@ -137,7 +153,10 @@ constructor(
     fun logoutExactSession(playerId: String?, sessionId: String?): LogoutOutcome {
         val id = parsePlayerId(playerId) ?: return LogoutOutcome.InvalidPlayerId
         val connectionId = parsePlayerId(sessionId) ?: return LogoutOutcome.InvalidPlayerId
-        return when (repository.deleteSessionForSession(id, connectionId)) {
+        val deleted =
+            if (writes.asyncLogout) writes.sessionEnded(id, connectionId, Instant.now())
+            else repository.deleteSessionForSession(id, connectionId)
+        return when (deleted) {
             DeleteSessionResult.REMOVED -> LogoutOutcome.Removed
             DeleteSessionResult.NOT_FOUND -> LogoutOutcome.NotFound
             DeleteSessionResult.ERROR -> LogoutOutcome.Failed("unable to remove player session")
@@ -152,6 +171,7 @@ constructor(
         val id = parsePlayerId(playerId) ?: return false
         val connectionId = parsePlayerId(sessionId) ?: return false
         val server = blankToNull(serverName) ?: return false
+        if (writes.asyncWrites) return writes.serverChanged(id, connectionId, server, Instant.now())
         return repository.updateServerForSession(id, connectionId, server)
     }
 
@@ -208,7 +228,7 @@ constructor(
             )
         ) {
             PlayerSessionRepository.ConsumeHandoffResult.Consumed -> {
-                if (name != null) nameRepository.upsertName(id, name, now)
+                if (name != null) recordName(id, connectionId, name, now)
                 ExactSessionClaimOutcome.Accepted(id, connectionId, now.plus(sessionTtl))
             }
             PlayerSessionRepository.ConsumeHandoffResult.NotFound ->
@@ -216,6 +236,12 @@ constructor(
             PlayerSessionRepository.ConsumeHandoffResult.Error ->
                 ExactSessionClaimOutcome.Failed("unable to consume session handoff")
         }
+    }
+
+    /** The name sighting of an exact-session login: queued when writes are async. */
+    private fun recordName(playerId: UUID, sessionId: UUID, name: String, seenAt: Instant) {
+        if (writes.asyncWrites) writes.nameSeen(playerId, sessionId, name, seenAt)
+        else nameRepository.upsertName(playerId, name, seenAt)
     }
 
     /**
@@ -334,8 +360,13 @@ constructor(
      * client's announced locale. A read failure resolves to null too: a language preference is not
      * worth failing a join over, so unlike the counts this does not throw.
      */
-    fun getLocale(playerId: String?): String? =
-        parsePlayerId(playerId)?.let(nameRepository::getLocale)
+    fun getLocale(playerId: String?): String? {
+        val id = parsePlayerId(playerId) ?: return null
+        if (!settingsCache.enabled) return nameRepository.getLocale(id)
+        return settingsCache.get(Setting.LOCALE, id) {
+            nameRepository.readSetting(id, Setting.LOCALE)
+        }
+    }
 
     /**
      * Stores a language preference against the durable player row, so it survives logout. A null or
@@ -344,15 +375,22 @@ constructor(
      */
     fun setLocale(playerId: String?, locale: String?): Boolean {
         val id = parsePlayerId(playerId) ?: return false
-        return nameRepository.setLocale(id, blankToNull(locale))
+        return nameRepository.setLocale(id, blankToNull(locale)).also { stored ->
+            if (stored) settingsChanged(id)
+        }
     }
 
     /**
      * A player's preferred region code. Null when none is set; a read failure resolves to null too,
      * like [getLocale].
      */
-    fun getPreferredRegion(playerId: String?): String? =
-        parsePlayerId(playerId)?.let(nameRepository::getPreferredRegion)
+    fun getPreferredRegion(playerId: String?): String? {
+        val id = parsePlayerId(playerId) ?: return null
+        if (!settingsCache.enabled) return nameRepository.getPreferredRegion(id)
+        return settingsCache.get(Setting.REGION, id) {
+            nameRepository.readSetting(id, Setting.REGION)
+        }
+    }
 
     /**
      * Stores a preferred region against the durable player row. A null or blank value clears it.
@@ -361,7 +399,16 @@ constructor(
      */
     fun setPreferredRegion(playerId: String?, region: String?): Boolean {
         val id = parsePlayerId(playerId) ?: return false
-        return nameRepository.setPreferredRegion(id, blankToNull(region))
+        return nameRepository.setPreferredRegion(id, blankToNull(region)).also { stored ->
+            if (stored) settingsChanged(id)
+        }
+    }
+
+    /** After a stored settings write: this runtime's caches now, every other one over NATS. */
+    private fun settingsChanged(playerId: UUID) {
+        if (!settingsCache.enabled) return
+        settingsCache.invalidate(playerId)
+        settingsInvalidations.publish(playerId)
     }
 
     /**

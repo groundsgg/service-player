@@ -1,5 +1,6 @@
 package gg.grounds.presence
 
+import gg.grounds.PlayerRole
 import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.time.TimeProvider
 import io.quarkus.scheduler.Scheduled
@@ -19,7 +20,11 @@ constructor(
     @ConfigProperty(name = "grounds.player.sessions.ttl", defaultValue = "90s")
     private lateinit var sessionTtl: Duration
 
-    @Scheduled(every = "{grounds.player.sessions.cleanup-interval}")
+    // Regional only: the core writer applies queued writes and owns no presence of its own.
+    @Scheduled(
+        every = "{grounds.player.sessions.cleanup-interval}",
+        skipExecutionIf = PlayerRole.RegionalOnly::class,
+    )
     fun expireStaleSessions() {
         val cutoff = timeProvider.now().minus(sessionTtl)
         val removed = repository.deleteStaleSessions(cutoff)

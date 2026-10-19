@@ -1,0 +1,91 @@
+package gg.grounds.events
+
+import io.nats.client.Connection
+import io.nats.client.ConnectionListener
+import io.nats.client.Nats
+import io.nats.client.Options
+import io.quarkus.runtime.ShutdownEvent
+import jakarta.enterprise.context.ApplicationScoped
+import jakarta.enterprise.event.Observes
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Duration
+import org.eclipse.microprofile.config.inject.ConfigProperty
+import org.jboss.logging.Logger
+
+/**
+ * One NATS connection for this service: the count broadcast, the write events and the settings
+ * invalidations share it.
+ *
+ * Connecting lazily and tolerating failure is deliberate: everything this service answers works
+ * without a broker. A broker that is down costs a stale count or a synchronous write, never a
+ * request, and must never stop the service from starting.
+ */
+@ApplicationScoped
+class NatsConnector(
+    @param:ConfigProperty(name = "nats.url") private val natsUrl: String,
+    @param:ConfigProperty(name = "nats.max-reconnects") private val maxReconnects: Int,
+    @param:ConfigProperty(name = "nats.reconnect-wait-seconds")
+    private val reconnectWaitSeconds: Long,
+    @param:ConfigProperty(name = "grounds.token-file") private val groundsTokenFile: String,
+) {
+
+    @Volatile private var connection: Connection? = null
+
+    // The URL may carry a password, so only its host is ever logged.
+    private val natsHost: String = runCatching { URI.create(natsUrl).host }.getOrNull() ?: "?"
+    private val urlHasCredentials: Boolean =
+        runCatching { URI.create(natsUrl).userInfo != null }.getOrDefault(false)
+
+    @Synchronized
+    fun connection(): Connection? {
+        connection?.let { existing ->
+            if (existing.status != Connection.Status.CLOSED) return existing
+        }
+        return try {
+            val builder =
+                Options.Builder()
+                    .server(natsUrl)
+                    .connectionName("service-player")
+                    .maxReconnects(maxReconnects)
+                    .reconnectWait(Duration.ofSeconds(reconnectWaitSeconds))
+                    .connectionListener(
+                        ConnectionListener { _, type ->
+                            LOG.infof("NATS connection event (event=%s)", type)
+                        }
+                    )
+            // The projected SA token as the NATS bearer, re-read per (re)connect so kubelet
+            // rotation is picked up. An absent file means no token, which is right for local runs
+            // and for the satellite leaf, which asks for no credentials. A URL that carries its own
+            // user and password (the core writer's static hub user) gets no token on top: the hub
+            // authenticates by user, and a second credential only confuses it.
+            val tokenPath = Path.of(groundsTokenFile)
+            if (!urlHasCredentials && Files.exists(tokenPath)) {
+                builder.tokenSupplier { Files.readString(tokenPath).trim().toCharArray() }
+            }
+            Nats.connect(builder.build()).also {
+                connection = it
+                LOG.infof("Connected to NATS (host=%s)", natsHost)
+            }
+        } catch (error: Exception) {
+            LOG.errorf(error, "Failed to connect to NATS (host=%s)", natsHost)
+            connection = null
+            null
+        }
+    }
+
+    fun onStop(@Observes event: ShutdownEvent) {
+        try {
+            connection?.close()
+        } catch (error: Exception) {
+            LOG.warnf(error, "Failed to close the NATS connection")
+        } finally {
+            connection = null
+        }
+    }
+
+    companion object {
+        private val LOG = Logger.getLogger(NatsConnector::class.java)
+    }
+}
