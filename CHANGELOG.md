@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.0](https://github.com/groundsgg/service-player/compare/v2.3.0...v2.4.0) (2026-10-19)
+
+
+### Features
+
+* **player:** queue non-verdict writes, cache settings, broadcast server counts ([#136](https://github.com/groundsgg/service-player/issues/136)) ([8276d59](https://github.com/groundsgg/service-player/commit/8276d5901c465aaf8f13ad6dc93dd3d62bfed9fc))
+
 ## [2.3.0](https://github.com/groundsgg/service-player/compare/v2.2.0...v2.3.0) (2026-10-17)
 
 
