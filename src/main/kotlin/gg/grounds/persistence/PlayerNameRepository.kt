@@ -41,6 +41,59 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
     }
 
     /**
+     * The writer's name upsert: like [upsertName], but an older sighting never overwrites a newer
+     * one, so a delayed or redelivered event cannot roll a renamed player back. Throws on a
+     * database error (the writer redelivers).
+     */
+    @Fresh
+    fun applyNameSeen(playerId: UUID, playerName: String, seenAt: Instant): Boolean =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(UPSERT_NAME_ORDERED).use { statement ->
+                statement.setObject(1, playerId)
+                statement.setString(2, playerName)
+                statement.setTimestamp(3, Timestamp.from(seenAt))
+                statement.executeUpdate() > 0
+            }
+        }
+
+    /** A stored preference read that tells "none set" apart from "could not read". */
+    sealed interface SettingRead {
+        data class Value(val value: String?) : SettingRead
+
+        data object Failed : SettingRead
+    }
+
+    enum class Setting(internal val query: String) {
+        LOCALE(SELECT_LOCALE),
+        REGION(SELECT_PREFERRED_REGION),
+    }
+
+    /**
+     * [getLocale] / [getPreferredRegion] for the settings cache, which must not store a failed read
+     * as "none set" for half an hour.
+     */
+    @Fresh
+    fun readSetting(playerId: UUID, setting: Setting): SettingRead =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(setting.query).use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.executeQuery().use { resultSet ->
+                        SettingRead.Value(if (resultSet.next()) resultSet.getString(1) else null)
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player setting fetch failed (playerId=%s, setting=%s, reason=sql_error)",
+                playerId,
+                setting,
+            )
+            SettingRead.Failed
+        }
+
+    /**
      * One query for every id — a `WHERE player_id = ANY(?)`, not N round-trips.
      *
      * Deliberately NOT `@Cached`, even though a durable name index is the textbook case for it. The
@@ -194,6 +247,14 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
             VALUES (?, ?, ?)
             ON CONFLICT (player_id) DO UPDATE
             SET player_name = EXCLUDED.player_name, last_seen_at = EXCLUDED.last_seen_at
+            """
+        private const val UPSERT_NAME_ORDERED =
+            """
+            INSERT INTO player_names (player_id, player_name, last_seen_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT (player_id) DO UPDATE
+            SET player_name = EXCLUDED.player_name, last_seen_at = EXCLUDED.last_seen_at
+            WHERE player_names.last_seen_at <= EXCLUDED.last_seen_at
             """
         private const val SELECT_NAMES =
             """

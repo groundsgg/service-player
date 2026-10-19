@@ -1,19 +1,14 @@
 package gg.grounds.events
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import gg.grounds.PlayerRole
 import gg.grounds.persistence.PlayerSessionRepository
 import io.nats.client.Connection
-import io.nats.client.ConnectionListener
-import io.nats.client.Nats
-import io.nats.client.Options
-import io.quarkus.runtime.ShutdownEvent
 import io.quarkus.runtime.StartupEvent
 import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.enterprise.event.Observes
 import jakarta.inject.Inject
-import java.nio.file.Files
-import java.nio.file.Path
-import java.time.Duration
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
@@ -25,6 +20,12 @@ import org.jboss.logging.Logger
  * read from memory when a ping arrives. A proxy showing a number a few seconds stale is fine; a
  * proxy showing *its own* player count as if it were the network's is not, and that is what happens
  * without this.
+ *
+ * With `grounds.player.counts.broadcast-servers` on, the same message also carries the players per
+ * backend server (`{"total":N,"servers":{"lobby-1":n,..}}`), so the proxies can answer a lobby's
+ * per-server counts from memory instead of calling `GET /v1/players/counts/servers`. One GROUPING
+ * SETS query per tick serves both; `total` stays the first key, which is what older proxy plugins
+ * read.
  *
  * Fan-out over NATS rather than a gRPC stream: one publish reaches every proxy in every region
  * regardless of how many there are, and the NATS client already handles reconnects. A stream would
@@ -39,81 +40,56 @@ class PlayerCountBroadcaster
 @Inject
 constructor(
     private val repository: PlayerSessionRepository,
-    @param:ConfigProperty(name = "nats.url") private val natsUrl: String,
-    @param:ConfigProperty(name = "nats.max-reconnects") private val maxReconnects: Int,
-    @param:ConfigProperty(name = "nats.reconnect-wait-seconds")
-    private val reconnectWaitSeconds: Long,
-    @param:ConfigProperty(name = "grounds.token-file") private val groundsTokenFile: String,
+    private val nats: NatsConnector,
+    private val role: PlayerRole,
+    private val json: ObjectMapper,
+    @param:ConfigProperty(name = "grounds.player.counts.broadcast-servers")
+    private val broadcastServers: Boolean,
 ) {
 
-    @Volatile private var connection: Connection? = null
-
-    fun onStart(@Observes event: StartupEvent) = connect()
-
-    fun onStop(@Observes event: ShutdownEvent) = close()
-
-    @Synchronized
-    fun connect() {
-        try {
-            val builder =
-                Options.Builder()
-                    .server(natsUrl)
-                    .connectionName("service-player")
-                    .maxReconnects(maxReconnects)
-                    .reconnectWait(Duration.ofSeconds(reconnectWaitSeconds))
-                    .connectionListener(
-                        ConnectionListener { _, type ->
-                            LOG.infof("NATS connection event (event=%s)", type)
-                        }
-                    )
-            // The projected SA token as the NATS bearer, re-read per (re)connect so kubelet
-            // rotation is picked up. Absent file means no token, which is right for local runs.
-            val tokenPath = Path.of(groundsTokenFile)
-            if (Files.exists(tokenPath)) {
-                builder.tokenSupplier { Files.readString(tokenPath).trim().toCharArray() }
-            }
-            connection = Nats.connect(builder.build())
-            LOG.infof("Connected to NATS for player-count broadcast (url=%s)", natsUrl)
-        } catch (error: Exception) {
-            // Not fatal. Everything else this service does works without NATS; the proxies simply
-            // keep their previous number until a connection comes back.
-            LOG.errorf(error, "Failed to connect to NATS (url=%s)", natsUrl)
-            connection = null
-        }
+    /** Connects at startup, as before, so the first tick already has a connection. */
+    fun onStart(@Observes event: StartupEvent) {
+        if (!role.writer) nats.connection()
     }
 
     @Scheduled(
         every = "{grounds.player.counts.broadcast-interval}",
         concurrentExecution = Scheduled.ConcurrentExecution.SKIP,
+        skipExecutionIf = PlayerRole.RegionalOnly::class,
     )
     fun broadcast() {
-        val conn = connection
+        val conn = nats.connection()
         if (conn == null || conn.status != Connection.Status.CONNECTED) return
 
-        val total =
-            when (val result = repository.countPlayersByProxy()) {
-                is PlayerSessionRepository.CountPlayersByProxyResult.Counted -> result.total
-                // Publishing a zero here would empty every server list on one failed query. Say
-                // nothing instead and let the consumers hold the last value they had.
-                PlayerSessionRepository.CountPlayersByProxyResult.Error -> return
-            }
+        // Publishing a zero on a failed query would empty every server list. Say nothing instead
+        // and let the consumers hold the last value they had.
+        val payload = payload() ?: return
 
         try {
-            conn.publish(SUBJECT, """{"total":$total}""".toByteArray(Charsets.UTF_8))
+            conn.publish(SUBJECT, payload)
         } catch (error: Exception) {
             LOG.warnf(error, "Player-count broadcast failed (subject=%s)", SUBJECT)
         }
     }
 
-    @Synchronized
-    fun close() {
-        try {
-            connection?.close()
-        } catch (error: Exception) {
-            LOG.warnf(error, "Failed to close the NATS connection")
-        } finally {
-            connection = null
+    internal fun payload(): ByteArray? {
+        if (!broadcastServers) {
+            val total =
+                when (val result = repository.countPlayersByProxy()) {
+                    is PlayerSessionRepository.CountPlayersByProxyResult.Counted -> result.total
+                    PlayerSessionRepository.CountPlayersByProxyResult.Error -> return null
+                }
+            return """{"total":$total}""".toByteArray(Charsets.UTF_8)
         }
+        val counted =
+            when (val result = repository.countPlayersByServer()) {
+                is PlayerSessionRepository.CountPlayersByServerResult.Counted -> result
+                PlayerSessionRepository.CountPlayersByServerResult.Error -> return null
+            }
+        val message = LinkedHashMap<String, Any>()
+        message["total"] = counted.total
+        message["servers"] = counted.servers.associate { it.serverName to it.players }
+        return json.writeValueAsBytes(message)
     }
 
     companion object {

@@ -84,6 +84,88 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    /**
+     * The claim used while session writes are queued (`grounds.player.async-writes`): the same one
+     * statement as [claimSession], plus two terms.
+     * - [endedSessionIds]: sessions this runtime has queued a logout for. Their row may still exist
+     *   until the writer deletes it, and a reconnect in that window must not be told "already
+     *   online" — the synchronous logout would have removed the row before it.
+     * - `server_updated_at` restarts with the session, so the writer's ordering guard for server
+     *   changes compares only events of the session that owns the row.
+     */
+    @Fresh
+    fun claimSessionAsync(
+        session: PlayerSession,
+        staleBefore: Instant,
+        endedSessionIds: Collection<UUID>,
+    ): ClaimSessionResult {
+        val sessionId = session.sessionId ?: return ClaimSessionResult.Error
+        return try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(CLAIM_SESSION_ASYNC).use { statement ->
+                    statement.setObject(1, session.playerId)
+                    statement.setTimestamp(2, Timestamp.from(session.connectedAt))
+                    statement.setTimestamp(3, Timestamp.from(session.lastSeenAt))
+                    statement.setString(4, session.playerName)
+                    statement.setString(5, session.proxyId)
+                    statement.setString(6, session.serverName)
+                    statement.setString(7, session.region)
+                    statement.setObject(8, sessionId)
+                    statement.setTimestamp(9, Timestamp.from(staleBefore))
+                    statement.setArray(
+                        10,
+                        connection.createArrayOf("uuid", endedSessionIds.toTypedArray()),
+                    )
+                    if (statement.executeUpdate() > 0) ClaimSessionResult.Claimed
+                    else ClaimSessionResult.AlreadyOnline
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player session claim failed (playerId=%s, reason=sql_error)",
+                session.playerId,
+            )
+            ClaimSessionResult.Error
+        }
+    }
+
+    /**
+     * The writer's server change: exact session, and never older than what the row already holds.
+     * UPDATE only — a change that arrives after its session ended finds no row (or a later
+     * session's) and changes nothing, so a late event cannot resurrect a session.
+     *
+     * Throws on a database error: the writer redelivers, the synchronous fallback answers 503.
+     */
+    @Fresh
+    fun applyServerChanged(
+        playerId: UUID,
+        sessionId: UUID,
+        serverName: String,
+        changedAt: Instant,
+    ): Boolean =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(UPDATE_SERVER_ORDERED).use { statement ->
+                statement.setString(1, serverName)
+                statement.setTimestamp(2, Timestamp.from(changedAt))
+                statement.setObject(3, playerId)
+                statement.setObject(4, sessionId)
+                statement.setTimestamp(5, Timestamp.from(changedAt))
+                statement.executeUpdate() > 0
+            }
+        }
+
+    /** The writer's logout: exact session, a duplicate is a no-op. Throws on a database error. */
+    @Fresh
+    fun applySessionEnded(playerId: UUID, sessionId: UUID): Boolean =
+        dataSource.connection.use { connection ->
+            connection.prepareStatement(DELETE_BY_PLAYER_AND_SESSION).use { statement ->
+                statement.setObject(1, playerId)
+                statement.setObject(2, sessionId)
+                statement.executeUpdate() > 0
+            }
+        }
+
     @Fresh
     fun createHandoff(
         playerId: UUID,
@@ -691,6 +773,36 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 session_id = EXCLUDED.session_id
             WHERE player_sessions.session_id = EXCLUDED.session_id
                OR player_sessions.last_seen_at < ?
+            """
+        private const val CLAIM_SESSION_ASYNC =
+            """
+            INSERT INTO player_sessions (player_id, connected_at, last_seen_at, player_name, proxy_id, server_name, region, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (player_id) DO UPDATE
+            SET connected_at = CASE
+                    WHEN player_sessions.session_id = EXCLUDED.session_id THEN player_sessions.connected_at
+                    ELSE EXCLUDED.connected_at
+                END,
+                last_seen_at = EXCLUDED.last_seen_at,
+                player_name = EXCLUDED.player_name,
+                proxy_id = EXCLUDED.proxy_id,
+                server_name = EXCLUDED.server_name,
+                region = EXCLUDED.region,
+                server_updated_at = CASE
+                    WHEN player_sessions.session_id = EXCLUDED.session_id THEN player_sessions.server_updated_at
+                    ELSE NULL
+                END,
+                session_id = EXCLUDED.session_id
+            WHERE player_sessions.session_id = EXCLUDED.session_id
+               OR player_sessions.last_seen_at < ?
+               OR player_sessions.session_id = ANY(?)
+            """
+        private const val UPDATE_SERVER_ORDERED =
+            """
+            UPDATE player_sessions
+            SET server_name = ?, server_updated_at = ?
+            WHERE player_id = ? AND session_id = ?
+              AND (server_updated_at IS NULL OR server_updated_at <= ?)
             """
         private const val INSERT_HANDOFF_FOR_SESSION =
             """
