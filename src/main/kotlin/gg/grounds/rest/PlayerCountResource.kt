@@ -1,7 +1,9 @@
 package gg.grounds.rest
 
 import gg.grounds.presence.PresenceService
+import jakarta.ws.rs.Consumes
 import jakarta.ws.rs.GET
+import jakarta.ws.rs.POST
 import jakarta.ws.rs.Path
 import jakarta.ws.rs.Produces
 import jakarta.ws.rs.core.MediaType
@@ -99,4 +101,42 @@ class PlayerCountResource(private val presence: PresenceService) {
         ),
     )
     fun byProxy(): ProxyCountsResponse = ProxyCountsResponse.from(presence.countPlayersByProxy())
+
+    @POST
+    @Path("/online")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Operation(
+        summary = "How many of the given players are online",
+        description =
+            "The lobby's \"friends online\": the caller already holds the id list (a friend " +
+                "list from service-social) and only needs the number. A POST because a full " +
+                "list of UUIDs as query parameters outgrows the request line.",
+    )
+    @APIResponses(
+        APIResponse(
+            responseCode = "200",
+            description = "The number of those players holding a session.",
+            content =
+                [
+                    Content(
+                        mediaType = MediaType.APPLICATION_JSON,
+                        schema = Schema(implementation = OnlineCountResponse::class),
+                    )
+                ],
+        ),
+        APIResponse(responseCode = "401", description = "Authentication is missing or invalid."),
+        APIResponse(
+            responseCode = "503",
+            description = "The session store could not be read.",
+            content =
+                [
+                    Content(
+                        mediaType = ProblemDetails.PROBLEM_JSON,
+                        schema = Schema(implementation = ProblemDetails::class),
+                    )
+                ],
+        ),
+    )
+    fun online(request: OnlineCountRequest?): OnlineCountResponse =
+        OnlineCountResponse(presence.countOnline(request?.playerIds ?: emptyList()))
 }

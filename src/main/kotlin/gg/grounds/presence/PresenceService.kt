@@ -7,6 +7,7 @@ import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByProxyResult
 import gg.grounds.persistence.PlayerSessionRepository.CountPlayersByServerResult
 import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
+import gg.grounds.persistence.PlayerSessionRepository.Playtime
 import gg.grounds.persistence.PlayerSessionRepository.ProxyPlayerCount
 import gg.grounds.persistence.PlayerSessionRepository.ServerPlayerCount
 import gg.grounds.settings.PlayerSettingsCache
@@ -352,6 +353,24 @@ constructor(
             is CountPlayersByProxyResult.Counted -> ProxyCounts(result.proxies, result.total)
             CountPlayersByProxyResult.Error -> throw PresenceUnavailableException()
         }
+
+    /**
+     * How long [playerId] has been online in total and on game servers, the running segment
+     * included. A player never seen is zero. A read failure throws, like the counts: zero is a
+     * plausible playtime that a scoreboard would render.
+     */
+    fun playtime(playerId: UUID): Playtime =
+        repository.findPlaytime(playerId, sessionTtl) ?: throw PresenceUnavailableException()
+
+    /**
+     * How many of [playerIds] are online — the lobby's "friends online". Malformed ids do not
+     * count, and ids beyond [MAX_LOOKUP_IDS] are ignored: a friend list is capped at 100 too.
+     */
+    fun countOnline(playerIds: List<String>): Int {
+        val ids = playerIds.asSequence().take(MAX_LOOKUP_IDS).mapNotNull(::parsePlayerId).toSet()
+        if (ids.isEmpty()) return 0
+        return repository.countOnline(ids) ?: throw PresenceUnavailableException()
+    }
 
     /**
      * A player's chosen interface language.
