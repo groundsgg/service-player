@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0](https://github.com/groundsgg/service-player/compare/v2.4.0...v2.5.0) (2026-10-24)
+
+
+### Features
+
+* track playtime per player ([#141](https://github.com/groundsgg/service-player/issues/141)) ([ed4ecef](https://github.com/groundsgg/service-player/commit/ed4ecefec640c5188cf6c0d0cdb98ea83dd38786))
+
 ## [2.4.0](https://github.com/groundsgg/service-player/compare/v2.3.0...v2.4.0) (2026-10-19)
 
 
