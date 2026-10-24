@@ -8,6 +8,7 @@ import jakarta.inject.Inject
 import java.sql.ResultSet
 import java.sql.SQLException
 import java.sql.Timestamp
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import javax.sql.DataSource
@@ -54,6 +55,8 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
     data class ServerPlayerCount(val serverName: String, val players: Int)
 
     data class ProxyPlayerCount(val proxyId: String, val region: String?, val players: Int)
+
+    data class Playtime(val totalMillis: Long, val playMillis: Long)
 
     @Fresh
     fun claimSession(session: PlayerSession, staleBefore: Instant): ClaimSessionResult {
@@ -670,6 +673,65 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         }
     }
 
+    /**
+     * What `player_playtime` has accumulated plus the segment the session is still in, so the
+     * number ticks up while the player is online. The running segment stops at [sessionTtl] past
+     * the last heartbeat, as the trigger that credits it does: a player on a crashed proxy stops
+     * earning time even before the cleanup removes the row. Null on a database error.
+     */
+    @Fresh
+    fun findPlaytime(playerId: UUID, sessionTtl: Duration): Playtime? =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_PLAYTIME).use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.setLong(2, sessionTtl.toMillis())
+                    statement.executeQuery().use { resultSet ->
+                        resultSet.next()
+                        Playtime(
+                            resultSet.getLong("total_millis"),
+                            resultSet.getLong("play_millis"),
+                        )
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player playtime read failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            null
+        }
+
+    /**
+     * How many of [playerIds] hold a session. Like the other counts, a session whose proxy stopped
+     * heartbeating still counts until the cleanup removes it. Null on a database error.
+     */
+    @Fresh
+    fun countOnline(playerIds: Collection<UUID>): Int? =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(COUNT_ONLINE).use { statement ->
+                    statement.setArray(
+                        1,
+                        connection.createArrayOf("uuid", playerIds.toTypedArray()),
+                    )
+                    statement.executeQuery().use { resultSet ->
+                        resultSet.next()
+                        resultSet.getInt(1)
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player online count failed (count=%d, reason=sql_error)",
+                playerIds.size,
+            )
+            null
+        }
+
     private fun mapSession(resultSet: ResultSet): PlayerSession {
         val playerId =
             requireNotNull(resultSet.getObject("player_id", UUID::class.java)) {
@@ -894,6 +956,34 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             SELECT proxy_id, region, COUNT(*) AS players, GROUPING(proxy_id, region) AS is_total
             FROM player_sessions
             GROUP BY GROUPING SETS ((proxy_id, region), ())
+            """
+
+        /**
+         * Always exactly one row: the requested id drives the joins, so a player who was never seen
+         * reads as zero rather than as no row. `player_server_is_game` and the segment's shape are
+         * the same ones the crediting trigger uses (V11).
+         */
+        private const val SELECT_PLAYTIME =
+            """
+            SELECT COALESCE(t.total_millis, 0) + COALESCE(live.millis, 0) AS total_millis,
+                   COALESCE(t.play_millis, 0) + CASE WHEN live.game THEN live.millis ELSE 0 END AS play_millis
+            FROM (SELECT ?::uuid AS player_id) AS requested
+            LEFT JOIN player_playtime AS t ON t.player_id = requested.player_id
+            LEFT JOIN (
+                SELECT player_id,
+                       GREATEST(
+                           0,
+                           (EXTRACT(EPOCH FROM LEAST(now(), last_seen_at + ?::bigint * INTERVAL '1 millisecond') - server_since) * 1000)::bigint
+                       ) AS millis,
+                       player_server_is_game(server_name) AS game
+                FROM player_sessions
+            ) AS live ON live.player_id = requested.player_id
+            """
+        private const val COUNT_ONLINE =
+            """
+            SELECT COUNT(*)
+            FROM player_sessions
+            WHERE player_id = ANY(?)
             """
 
         private const val COUNT_PLAYERS_BY_SERVER =

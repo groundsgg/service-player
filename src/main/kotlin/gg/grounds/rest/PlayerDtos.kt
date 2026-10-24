@@ -267,3 +267,33 @@ data class SetRegionRequest(
     )
     val region: String? = null
 )
+
+@Schema(name = "Playtime", description = "How long a player has been online, across sessions.")
+data class PlaytimeResponse(
+    @get:Schema(description = "Time online on any server, the lobby included, in milliseconds.")
+    val totalMillis: Long,
+    @get:Schema(
+        description =
+            "The part of `totalMillis` spent on game servers: everything except lobbies and the " +
+                "time between servers."
+    )
+    val playMillis: Long,
+) {
+    companion object {
+        fun from(playtime: PlayerSessionRepository.Playtime) =
+            PlaytimeResponse(playtime.totalMillis, playtime.playMillis)
+    }
+}
+
+@Schema(name = "OnlineCountRequest", description = "The players to check, e.g. a friend list.")
+data class OnlineCountRequest(
+    @get:Schema(
+        description =
+            "Player UUIDs. Malformed ones do not count, and ids beyond the server's cap of " +
+                "${PresenceService.MAX_LOOKUP_IDS} are ignored."
+    )
+    val playerIds: List<String>? = null
+)
+
+@Schema(name = "OnlineCount", description = "How many of the given players are online.")
+data class OnlineCountResponse(val online: Int)

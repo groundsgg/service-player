@@ -298,4 +298,56 @@ class PlayerDirectoryResourceTest {
     fun `a malformed id in the region path is a bad request`() {
         given().get("/v1/players/not-a-uuid/region").then().statusCode(400)
     }
+
+    @Test
+    fun `playtime answers total and game time`() {
+        whenever(repository.findPlaytime(eq(playerId), any()))
+            .thenReturn(PlayerSessionRepository.Playtime(totalMillis = 5_000, playMillis = 2_000))
+
+        given()
+            .get("/v1/players/$playerId/playtime")
+            .then()
+            .statusCode(200)
+            .body("totalMillis", equalTo(5_000))
+            .body("playMillis", equalTo(2_000))
+    }
+
+    @Test
+    fun `playtime for a malformed id is 400, and an unreadable store 503 rather than zero`() {
+        given().get("/v1/players/not-a-uuid/playtime").then().statusCode(400)
+
+        whenever(repository.findPlaytime(eq(playerId), any())).thenReturn(null)
+        given()
+            .get("/v1/players/$playerId/playtime")
+            .then()
+            .statusCode(503)
+            .body("code", equalTo("store_unavailable"))
+    }
+
+    @Test
+    fun `the online count asks the store only for well-formed ids`() {
+        val friend = UUID.randomUUID()
+        whenever(repository.countOnline(setOf(playerId, friend))).thenReturn(1)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"playerIds":["$playerId","$friend","not-a-uuid"]}""")
+            .post("/v1/players/counts/online")
+            .then()
+            .statusCode(200)
+            .body("online", equalTo(1))
+    }
+
+    @Test
+    fun `an online count of nobody never hits the store`() {
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"playerIds":[]}""")
+            .post("/v1/players/counts/online")
+            .then()
+            .statusCode(200)
+            .body("online", equalTo(0))
+
+        verify(repository, never()).countOnline(any())
+    }
 }
