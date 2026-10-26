@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.0](https://github.com/groundsgg/service-player/compare/v2.5.0...v2.6.0) (2026-10-26)
+
+
+### Features
+
+* **directory:** search durable player names for offline moderation ([#143](https://github.com/groundsgg/service-player/issues/143)) ([b7e2c32](https://github.com/groundsgg/service-player/commit/b7e2c32b9e963f359349470f62c35521a7633871))
+* store a player's web profile visibility ([#145](https://github.com/groundsgg/service-player/issues/145)) ([bfa47f7](https://github.com/groundsgg/service-player/commit/bfa47f744959989600e8fbf5d17a2680aba180c8))
+
 ## [2.5.0](https://github.com/groundsgg/service-player/compare/v2.4.0...v2.5.0) (2026-10-24)
 
 
