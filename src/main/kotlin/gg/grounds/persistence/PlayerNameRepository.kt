@@ -238,6 +238,51 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
         }
     }
 
+    /**
+     * The player's profile visibility, or null when they have chosen none. A failed read is
+     * [SettingRead.Failed], never null: a reader that took it for "none set" would show a private
+     * profile as public.
+     */
+    @Fresh
+    fun readProfileVisibility(playerId: UUID): SettingRead =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(SELECT_PROFILE_VISIBILITY).use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.executeQuery().use { resultSet ->
+                        SettingRead.Value(if (resultSet.next()) resultSet.getString(1) else null)
+                    }
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player profile visibility fetch failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            SettingRead.Failed
+        }
+
+    /** Sets or clears the profile visibility. Updates only, like [setLocale]: a miss is false. */
+    @Fresh
+    fun setProfileVisibility(playerId: UUID, visibility: String?): Boolean =
+        try {
+            dataSource.connection.use { connection ->
+                connection.prepareStatement(UPDATE_PROFILE_VISIBILITY).use { statement ->
+                    statement.setString(1, visibility)
+                    statement.setObject(2, playerId)
+                    statement.executeUpdate() > 0
+                }
+            }
+        } catch (error: SQLException) {
+            LOG.errorf(
+                error,
+                "Player profile visibility update failed (playerId=%s, reason=sql_error)",
+                playerId,
+            )
+            false
+        }
+
     companion object {
         private val LOG = Logger.getLogger(PlayerNameRepository::class.java)
 
@@ -268,5 +313,9 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
             "SELECT preferred_region FROM player_names WHERE player_id = ?"
         private const val UPDATE_PREFERRED_REGION =
             "UPDATE player_names SET preferred_region = ? WHERE player_id = ?"
+        private const val SELECT_PROFILE_VISIBILITY =
+            "SELECT profile_visibility FROM player_names WHERE player_id = ?"
+        private const val UPDATE_PROFILE_VISIBILITY =
+            "UPDATE player_names SET profile_visibility = ? WHERE player_id = ?"
     }
 }
