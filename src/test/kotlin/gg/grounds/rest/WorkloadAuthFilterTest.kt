@@ -106,6 +106,8 @@ class WorkloadAuthFilterTest {
                 "v1/players/sessions/heartbeats",
                 "v1/players/names",
                 "v1/players/names/suggestions",
+                "v1/players/names/known",
+                "/v1/players/names/known",
                 "v1/players/counts/proxies",
                 "v1/players/8f3a1c2e-4b5d-4e6f-8a9b-0c1d2e3f4a5b/session",
                 "v1/players/8f3a1c2e-4b5d-4e6f-8a9b-0c1d2e3f4a5b/locale",
