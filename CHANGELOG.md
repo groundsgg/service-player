@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.1](https://github.com/groundsgg/service-player/compare/v2.6.0...v2.6.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **presence:** preserve pending handoffs during proxy restarts ([#146](https://github.com/groundsgg/service-player/issues/146)) ([b54bb60](https://github.com/groundsgg/service-player/commit/b54bb60d9da2a3a9fa019b29724cef9af50fbe3d))
+
 ## [2.6.0](https://github.com/groundsgg/service-player/compare/v2.5.0...v2.6.0) (2026-10-26)
 
 
