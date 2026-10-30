@@ -111,6 +111,44 @@ class AsyncWritesIT {
     }
 
     @Test
+    fun `queued logout cannot let a tokenless reconnect supersede a pending handoff`() {
+        val playerId = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val destination = UUID.randomUUID()
+        claim(playerId, source).then().statusCode(201)
+        val token =
+            given()
+                .contentType(ContentType.JSON)
+                .body(mapOf("sessionId" to source.toString()))
+                .post("/v2/players/$playerId/session/transfer")
+                .then()
+                .statusCode(201)
+                .extract()
+                .path<String>("token")
+
+        logout(playerId, source).then().statusCode(204)
+        claim(playerId, UUID.randomUUID()).then().statusCode(409)
+        drain()
+        assertEquals(source, sessionId(playerId))
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(
+                mapOf(
+                    "playerId" to playerId.toString(),
+                    "sessionId" to destination.toString(),
+                    "handoffToken" to token,
+                    "proxyId" to "velocity-2",
+                )
+            )
+            .post("/v2/players/sessions/transfer")
+            .then()
+            .statusCode(201)
+        drain()
+        assertEquals(destination, sessionId(playerId))
+    }
+
+    @Test
     fun `a session nobody logged out still makes a second claim already online`() {
         val playerId = UUID.randomUUID()
         claim(playerId, UUID.randomUUID()).then().statusCode(201)

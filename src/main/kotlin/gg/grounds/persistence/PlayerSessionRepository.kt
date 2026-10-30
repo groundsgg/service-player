@@ -92,7 +92,8 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
      * statement as [claimSession], plus two terms.
      * - [endedSessionIds]: sessions this runtime has queued a logout for. Their row may still exist
      *   until the writer deletes it, and a reconnect in that window must not be told "already
-     *   online" — the synchronous logout would have removed the row before it.
+     *   online" — the synchronous logout would have removed the row before it. A pending handoff
+     *   reserves the row for its destination on both paths, until its token expires.
      * - `server_updated_at` restarts with the session, so the writer's ordering guard for server
      *   changes compares only events of the session that owns the row.
      */
@@ -158,7 +159,12 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             }
         }
 
-    /** The writer's logout: exact session, a duplicate is a no-op. Throws on a database error. */
+    /**
+     * The writer's logout: exact session, a duplicate is a no-op. An issued handoff keeps the
+     * source row until the destination consumes it; disconnect normally arrives before login on the
+     * other proxy. Unfinished transfers remain bounded by the normal presence lease cleanup. Throws
+     * on a database error.
+     */
     @Fresh
     fun applySessionEnded(playerId: UUID, sessionId: UUID): Boolean =
         dataSource.connection.use { connection ->
@@ -817,6 +823,13 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             """
             DELETE FROM player_sessions
             WHERE player_id = ? AND session_id = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM player_session_handoffs AS handoff
+                  WHERE handoff.player_id = player_sessions.player_id
+                    AND handoff.source_session_id = player_sessions.session_id
+                    AND handoff.consumed_at IS NULL
+                    AND handoff.expires_at > CURRENT_TIMESTAMP
+              )
             """
         private const val CLAIM_SESSION =
             """
@@ -857,7 +870,16 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                 session_id = EXCLUDED.session_id
             WHERE player_sessions.session_id = EXCLUDED.session_id
                OR player_sessions.last_seen_at < ?
-               OR player_sessions.session_id = ANY(?)
+               OR (
+                   player_sessions.session_id = ANY(?)
+                   AND NOT EXISTS (
+                       SELECT 1 FROM player_session_handoffs AS handoff
+                       WHERE handoff.player_id = player_sessions.player_id
+                         AND handoff.source_session_id = player_sessions.session_id
+                         AND handoff.consumed_at IS NULL
+                         AND handoff.expires_at > CURRENT_TIMESTAMP
+                   )
+               )
             """
         private const val UPDATE_SERVER_ORDERED =
             """

@@ -1,5 +1,6 @@
 package gg.grounds.rest
 
+import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.presence.PlayerPostgresTestResource
 import gg.grounds.presence.PlayerSessionPostgresTestProfile
 import io.quarkus.test.common.QuarkusTestResource
@@ -20,6 +21,66 @@ import org.junit.jupiter.api.Test
 @TestProfile(PlayerSessionPostgresTestProfile::class)
 class PlayerSessionV2ResourceTest {
     @Inject lateinit var dataSource: DataSource
+    @Inject lateinit var sessions: PlayerSessionRepository
+
+    @Test
+    fun `source disconnect before destination login preserves the issued handoff`() {
+        val playerId = UUID.randomUUID()
+        val sourceSession = UUID.randomUUID()
+        claim(playerId, sourceSession, "velocity-1").then().statusCode(201)
+        val token = issueHandoff(playerId, sourceSession)
+
+        given().delete("/v2/players/$playerId/session?sessionId=$sourceSession")
+        claim(playerId, UUID.randomUUID(), "velocity-3").then().statusCode(409)
+        consume(token, playerId, UUID.randomUUID(), "velocity-2").then().statusCode(201)
+        consume(token, playerId, UUID.randomUUID(), "velocity-3").then().statusCode(409)
+        given()
+            .delete("/v2/players/$playerId/session?sessionId=$sourceSession")
+            .then()
+            .statusCode(404)
+        given()
+            .get("/v1/players/$playerId/session")
+            .then()
+            .statusCode(200)
+            .body("proxyId", equalTo("velocity-2"))
+    }
+
+    @Test
+    fun `queued source disconnect before destination login preserves the issued handoff`() {
+        val playerId = UUID.randomUUID()
+        val sourceSession = UUID.randomUUID()
+        claim(playerId, sourceSession, "velocity-1").then().statusCode(201)
+        val token = issueHandoff(playerId, sourceSession)
+
+        sessions.applySessionEnded(playerId, sourceSession)
+
+        consume(token, playerId, UUID.randomUUID(), "velocity-2").then().statusCode(201)
+    }
+
+    @Test
+    fun `expired unconsumed handoff does not prevent logout`() {
+        val playerId = UUID.randomUUID()
+        val sourceSession = UUID.randomUUID()
+        claim(playerId, sourceSession, "velocity-1").then().statusCode(201)
+        val token = issueHandoff(playerId, sourceSession)
+        dataSource.connection.use { connection ->
+            connection
+                .prepareStatement(
+                    "UPDATE player_session_handoffs SET expires_at = NOW() - INTERVAL '1 second' WHERE player_id = ?"
+                )
+                .use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.executeUpdate()
+                }
+        }
+
+        given()
+            .delete("/v2/players/$playerId/session?sessionId=$sourceSession")
+            .then()
+            .statusCode(204)
+        consume(token, playerId, UUID.randomUUID(), "velocity-2").then().statusCode(409)
+        given().get("/v1/players/$playerId/session").then().statusCode(404)
+    }
 
     @Test
     fun `separate profile uuids can both be admitted`() {
