@@ -26,8 +26,8 @@ constructor(
 ) {
     @Volatile private var dispatcher: Dispatcher? = null
 
-    fun publish(playerId: UUID) {
-        if (!cache.enabled) return
+    fun publish(playerId: UUID, force: Boolean = false) {
+        if (!force && !cache.enabled) return
         try {
             nats.connection()?.publish(SUBJECT_PREFIX + playerId, ByteArray(0))
         } catch (error: Exception) {

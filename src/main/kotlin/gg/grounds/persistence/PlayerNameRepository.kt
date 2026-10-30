@@ -283,6 +283,35 @@ class PlayerNameRepository @Inject constructor(private val dataSource: DataSourc
             false
         }
 
+    /** Authoritative per-connection read: never cache a failed read as the ON default. */
+    @Fresh
+    fun sidebarEnabled(playerId: UUID): Boolean =
+        dataSource.connection.use { connection ->
+            connection
+                .prepareStatement("SELECT sidebar_enabled FROM player_names WHERE player_id = ?")
+                .use { statement ->
+                    statement.setObject(1, playerId)
+                    statement.executeQuery().use { result ->
+                        if (result.next()) result.getBoolean(1) else true
+                    }
+                }
+        }
+
+    /**
+     * Updates only this preference; unknown players are not inserted and SQL failures propagate.
+     */
+    @Fresh
+    fun setSidebarEnabled(playerId: UUID, enabled: Boolean): Boolean =
+        dataSource.connection.use { connection ->
+            connection
+                .prepareStatement("UPDATE player_names SET sidebar_enabled = ? WHERE player_id = ?")
+                .use { statement ->
+                    statement.setBoolean(1, enabled)
+                    statement.setObject(2, playerId)
+                    statement.executeUpdate() > 0
+                }
+        }
+
     companion object {
         private val LOG = Logger.getLogger(PlayerNameRepository::class.java)
 
