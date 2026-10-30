@@ -10,7 +10,6 @@ import org.testcontainers.containers.PostgreSQLContainer
  * a running server instead.
  */
 class PlayerPostgresTestResource : QuarkusTestResourceLifecycleManager {
-    private var postgres: PostgreSQLContainer<Nothing>? = null
 
     override fun start(): Map<String, String> {
         val external = System.getenv("TEST_POSTGRES_URL")
@@ -22,9 +21,7 @@ class PlayerPostgresTestResource : QuarkusTestResourceLifecycleManager {
                 "quarkus.flyway.migrate-at-start" to "true",
             )
         }
-        val container = PostgreSQLContainer<Nothing>("postgres:16-alpine")
-        container.start()
-        postgres = container
+        val container = shared
         return mapOf(
             "quarkus.datasource.jdbc.url" to "${container.jdbcUrl}&currentSchema=player",
             "quarkus.datasource.username" to container.username,
@@ -33,8 +30,14 @@ class PlayerPostgresTestResource : QuarkusTestResourceLifecycleManager {
         )
     }
 
-    override fun stop() {
-        postgres?.stop()
+    // Quarkus can reuse datasource configuration between test profiles. Keep that URL alive
+    // for the test JVM, just like StreamInfra/ValkeyInfra; Testcontainers cleans up on exit.
+    override fun stop() = Unit
+
+    companion object {
+        private val shared by lazy {
+            PostgreSQLContainer<Nothing>("postgres:16-alpine").apply { start() }
+        }
     }
 }
 
