@@ -88,7 +88,10 @@ class PlayerSessionV2Resource(
         request: ExactSessionHandoffIssueRequest?,
     ): Response {
         val body = request ?: throw InvalidRequestException("a request body is required")
-        return when (val result = presence.issueSessionHandoff(playerId, body.sessionId)) {
+        return when (
+            val result =
+                presence.issueSessionHandoff(playerId, body.sessionId, body.boundedAdmission)
+        ) {
             is HandoffIssueOutcome.Issued ->
                 Response.status(Response.Status.CREATED)
                     .entity(ExactSessionHandoffIssueResponse(result.token, result.expiresAt))

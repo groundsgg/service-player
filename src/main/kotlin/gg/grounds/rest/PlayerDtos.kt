@@ -116,7 +116,10 @@ data class ExactSessionHeartbeatRequest(
 
 data class ExactSessionServerRequest(val sessionId: String?, val serverName: String?)
 
-data class ExactSessionHandoffIssueRequest(val sessionId: String?)
+data class ExactSessionHandoffIssueRequest(
+    val sessionId: String?,
+    val boundedAdmission: Boolean = false,
+)
 
 data class ExactSessionHandoffIssueResponse(val token: String, val expiresAt: Instant)
 

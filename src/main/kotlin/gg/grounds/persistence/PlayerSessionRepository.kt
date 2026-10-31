@@ -182,6 +182,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         tokenHash: ByteArray,
         expiresAt: Instant,
         activeAfter: Instant,
+        boundedAdmission: Boolean = false,
     ): CreateHandoffResult =
         try {
             dataSource.connection.use { connection ->
@@ -190,7 +191,8 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                     connection.createStatement().use {
                         it.execute("SET LOCAL statement_timeout = '2s'")
                         it.execute("SET LOCAL lock_timeout = '1s'")
-                        it.execute("SELECT pg_advisory_xact_lock(838823140546827414)")
+                        if (boundedAdmission)
+                            it.execute("SELECT pg_advisory_xact_lock(838823140546827414)")
                     }
                     val result =
                         connection.prepareStatement(INSERT_HANDOFF_FOR_SESSION).use { statement ->
@@ -199,6 +201,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                             statement.setObject(3, playerId)
                             statement.setObject(4, sessionId)
                             statement.setTimestamp(5, Timestamp.from(activeAfter))
+                            statement.setBoolean(6, boundedAdmission)
                             when (statement.executeUpdate()) {
                                 1 -> CreateHandoffResult.Created
                                 else -> CreateHandoffResult.NoActiveSession
@@ -924,8 +927,8 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             SELECT ?, player_id, session_id, ?
             FROM player_sessions
             WHERE player_id = ? AND session_id = ? AND last_seen_at >= ?
-              AND (SELECT count(*) FROM player_session_handoffs
-                   WHERE consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP) < 32
+              AND (NOT ? OR (SELECT count(*) FROM player_session_handoffs
+                   WHERE consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP) < 32)
             """
         private const val CONSUME_HANDOFF =
             """
@@ -939,6 +942,7 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
                         WHERE other.player_id = candidate.player_id
                           AND other.source_session_id = candidate.source_session_id
                           AND other.admission_connection_id IS NOT NULL
+                          AND other.expires_at > clock_timestamp()
                     )))
             RETURNING source_session_id
             """

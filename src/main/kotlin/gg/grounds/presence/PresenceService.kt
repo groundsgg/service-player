@@ -177,7 +177,11 @@ constructor(
         return repository.updateServerForSession(id, connectionId, server)
     }
 
-    fun issueSessionHandoff(playerId: String?, sessionId: String?): HandoffIssueOutcome {
+    fun issueSessionHandoff(
+        playerId: String?,
+        sessionId: String?,
+        boundedAdmission: Boolean = false,
+    ): HandoffIssueOutcome {
         val id = parsePlayerId(playerId) ?: return HandoffIssueOutcome.InvalidId
         val connectionId = parsePlayerId(sessionId) ?: return HandoffIssueOutcome.InvalidId
         val now = Instant.now()
@@ -191,6 +195,7 @@ constructor(
                 tokenHash = hashHandoffToken(token),
                 expiresAt = expiresAt,
                 activeAfter = now.minus(sessionTtl),
+                boundedAdmission = boundedAdmission,
             )
         ) {
             PlayerSessionRepository.CreateHandoffResult.Created ->

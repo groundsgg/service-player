@@ -419,10 +419,16 @@ class PlayerSessionV2ResourceTest {
         try {
             given()
                 .contentType(ContentType.JSON)
-                .body(mapOf("sessionId" to source.toString()))
+                .body(mapOf("sessionId" to source.toString(), "boundedAdmission" to true))
                 .post("/v2/players/$player/session/transfer")
                 .then()
                 .statusCode(409)
+            given()
+                .contentType(ContentType.JSON)
+                .body(mapOf("sessionId" to source.toString()))
+                .post("/v2/players/$player/session/transfer")
+                .then()
+                .statusCode(201)
         } finally {
             dataSource.connection.use { db ->
                 db.prepareStatement("DELETE FROM player_session_handoffs WHERE player_id = ?").use {
@@ -528,6 +534,27 @@ class PlayerSessionV2ResourceTest {
         admit(fresh, player, UUID.randomUUID(), "other").then().statusCode(201)
         admit(first, player, connection, "target").then().statusCode(409)
         consumeBound(first, player, connection, "target").then().statusCode(409)
+    }
+
+    @Test
+    fun `fresh legacy handoff succeeds after a reserved sibling expires without another admission`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val connection = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val first = issueHandoff(player, source)
+        admit(first, player, connection, "target").then().statusCode(201)
+        dataSource.connection.use { db ->
+            db.prepareStatement(
+                    "UPDATE player_session_handoffs SET expires_at = NOW() - INTERVAL '1 second' WHERE player_id = ?"
+                )
+                .use {
+                    it.setObject(1, player)
+                    it.executeUpdate()
+                }
+        }
+        val fresh = issueHandoff(player, source)
+        consume(fresh, player, UUID.randomUUID(), "legacy-target").then().statusCode(201)
     }
 
     private fun abortAdmission(token: String, player: UUID, connection: UUID, proxy: String) =
