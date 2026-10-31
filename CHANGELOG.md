@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.1](https://github.com/groundsgg/service-player/compare/v2.7.0...v2.7.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **settings:** broadcast locale changes with cache disabled ([#150](https://github.com/groundsgg/service-player/issues/150)) ([542b898](https://github.com/groundsgg/service-player/commit/542b898984b5b121086f92b94c9f936482d0a9d8))
+
 ## [2.7.0](https://github.com/groundsgg/service-player/compare/v2.6.1...v2.7.0) (2026-10-30)
 
 
