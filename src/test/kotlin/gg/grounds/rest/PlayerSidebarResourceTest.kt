@@ -123,4 +123,84 @@ class PlayerSidebarResourceTest {
             }
         }
     }
+
+    @Test
+    fun `locale changes and client default reach every subscriber with cache disabled`() {
+        assertFalse(cache.enabled)
+        val id = known()
+        val subject = SettingsInvalidations.SUBJECT_PREFIX + id
+        Nats.connect(StreamInfra.natsUrl()).use { a ->
+            Nats.connect(StreamInfra.natsUrl()).use { b ->
+                val first = a.subscribe(subject)
+                val second = b.subscribe(subject)
+                a.flush(Duration.ofSeconds(3))
+                b.flush(Duration.ofSeconds(3))
+                for ((body, expected) in
+                    listOf(
+                        """{"locale":"fr"}""" to "fr",
+                        """{"locale":null}""" to null,
+                    )) {
+                    given()
+                        .contentType(ContentType.JSON)
+                        .body(body)
+                        .put("/v1/players/$id/locale")
+                        .then()
+                        .statusCode(204)
+                    for (sub in listOf(first, second)) {
+                        val event = sub.nextMessage(Duration.ofSeconds(5))
+                        assertNotNull(event, "Each backend must receive committed locale changes")
+                        assertEquals(subject, event.subject)
+                        assertEquals(
+                            0,
+                            event.data.size,
+                            "Invalidations carry no preference or identity payload",
+                        )
+                    }
+                    given()
+                        .get("/v1/players/$id/locale")
+                        .then()
+                        .statusCode(200)
+                        .body("locale", equalTo(expected))
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `rejected locale requests and nonexistent players emit no invalidation`() {
+        assertFalse(cache.enabled)
+        val id = known()
+        val missing = UUID.randomUUID()
+        Nats.connect(StreamInfra.natsUrl()).use { connection ->
+            val subscriptions =
+                listOf(id.toString(), missing.toString(), "not-a-uuid").map {
+                    connection.subscribe(SettingsInvalidations.SUBJECT_PREFIX + it)
+                }
+            connection.flush(Duration.ofSeconds(3))
+            given()
+                .contentType(ContentType.JSON)
+                .body("{invalid")
+                .put("/v1/players/$id/locale")
+                .then()
+                .statusCode(400)
+            given()
+                .contentType(ContentType.JSON)
+                .body("""{"locale":"fr"}""")
+                .put("/v1/players/not-a-uuid/locale")
+                .then()
+                .statusCode(400)
+            given()
+                .contentType(ContentType.JSON)
+                .body("""{"locale":"fr"}""")
+                .put("/v1/players/$missing/locale")
+                .then()
+                .statusCode(404)
+            for (events in subscriptions) assertNull(events.nextMessage(Duration.ofMillis(500)))
+            given()
+                .get("/v1/players/$id/locale")
+                .then()
+                .statusCode(200)
+                .body("locale", equalTo("de"))
+        }
+    }
 }

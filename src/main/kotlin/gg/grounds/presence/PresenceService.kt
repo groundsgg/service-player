@@ -425,9 +425,8 @@ constructor(
 
     /** After a stored settings write: this runtime's caches now, every other one over NATS. */
     private fun settingsChanged(playerId: UUID) {
-        if (!settingsCache.enabled) return
-        settingsCache.invalidate(playerId)
-        settingsInvalidations.publish(playerId)
+        if (settingsCache.enabled) settingsCache.invalidate(playerId)
+        settingsInvalidations.publish(playerId, force = true)
     }
 
     /**
