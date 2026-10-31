@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.2](https://github.com/groundsgg/service-player/compare/v2.7.1...v2.7.2) (2026-10-31)
+
+
+### Bug Fixes
+
+* **presence:** bind transfer admission to one destination connection ([#152](https://github.com/groundsgg/service-player/issues/152)) ([289239e](https://github.com/groundsgg/service-player/commit/289239ea8c82d4f9037b4d6e9dc6529598ab2f07))
+
 ## [2.7.1](https://github.com/groundsgg/service-player/compare/v2.7.0...v2.7.1) (2026-10-31)
 
 
