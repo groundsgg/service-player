@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/groundsgg/service-player/compare/v2.6.1...v2.7.0) (2026-10-30)
+
+
+### Features
+
+* persist scoreboard visibility per player ([#148](https://github.com/groundsgg/service-player/issues/148)) ([2f7be71](https://github.com/groundsgg/service-player/commit/2f7be71e92c55d0e1b78872a2e3edb241ec79ef6))
+
 ## [2.6.1](https://github.com/groundsgg/service-player/compare/v2.6.0...v2.6.1) (2026-10-30)
 
 
