@@ -6,6 +6,9 @@ import gg.grounds.presence.PresenceService
 import gg.grounds.presence.PresenceService.ExactSessionClaimOutcome
 import gg.grounds.presence.PresenceService.HandoffIssueOutcome
 import gg.grounds.presence.PresenceService.LogoutOutcome
+import io.micrometer.core.annotation.Timed
+import io.micrometer.core.instrument.MeterRegistry
+import jakarta.inject.Inject
 import jakarta.ws.rs.Consumes
 import jakarta.ws.rs.DELETE
 import jakarta.ws.rs.POST
@@ -26,6 +29,8 @@ class PlayerSessionV2Resource(
     private val presence: PresenceService,
     private val heartbeatService: PlayerHeartbeatService,
 ) {
+    @Inject lateinit var metrics: MeterRegistry
+
     @POST
     @Path("/sessions")
     @Consumes(MediaType.APPLICATION_JSON)
@@ -83,7 +88,10 @@ class PlayerSessionV2Resource(
         request: ExactSessionHandoffIssueRequest?,
     ): Response {
         val body = request ?: throw InvalidRequestException("a request body is required")
-        return when (val result = presence.issueSessionHandoff(playerId, body.sessionId)) {
+        return when (
+            val result =
+                presence.issueSessionHandoff(playerId, body.sessionId, body.boundedAdmission)
+        ) {
             is HandoffIssueOutcome.Issued ->
                 Response.status(Response.Status.CREATED)
                     .entity(ExactSessionHandoffIssueResponse(result.token, result.expiresAt))
@@ -100,6 +108,102 @@ class PlayerSessionV2Resource(
             is HandoffIssueOutcome.Failed ->
                 problem(503, "Service unavailable", result.message, "store_unavailable")
         }
+    }
+
+    @POST
+    @Path("/sessions/transfer/admission/abort")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Operation(
+        summary = "Fence an aborted admission and release only its exact destination session"
+    )
+    fun abortTransfer(request: TransferAdmissionRequest?): Response {
+        val body = request ?: throw InvalidRequestException("a request body is required")
+        return when (
+            presence.abortTransferAdmission(
+                body.playerId,
+                body.handoffToken,
+                body.connectionId,
+                body.destinationProxyId,
+            )
+        ) {
+            gg.grounds.persistence.TransferAdmissionRepository.AbortResult.Closed ->
+                Response.noContent().build()
+            gg.grounds.persistence.TransferAdmissionRepository.AbortResult.Invalid ->
+                problem(
+                    409,
+                    "Transfer unavailable",
+                    "Invalid admission identity.",
+                    "handoff_unavailable",
+                )
+            gg.grounds.persistence.TransferAdmissionRepository.AbortResult.Error ->
+                problem(
+                    503,
+                    "Service unavailable",
+                    "Unable to close transfer.",
+                    "store_unavailable",
+                )
+        }
+    }
+
+    @POST
+    @Path("/sessions/transfer/admission")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Reserve a handoff for one destination connection before authentication")
+    @Timed(value = "player.transfer.admission.duration")
+    fun admitTransfer(request: TransferAdmissionRequest?): Response {
+        val body = request ?: throw InvalidRequestException("a request body is required")
+        val started = System.nanoTime()
+        val response =
+            when (
+                val result =
+                    presence.reserveTransferAdmission(
+                        body.playerId,
+                        body.handoffToken,
+                        body.connectionId,
+                        body.destinationProxyId,
+                    )
+            ) {
+                is gg.grounds.persistence.TransferAdmissionRepository.Result.Admitted ->
+                    Response.status(201)
+                        .entity(
+                            TransferAdmissionResponse(
+                                body.playerId!!,
+                                body.connectionId!!,
+                                body.destinationProxyId!!,
+                                result.expiresAt,
+                            )
+                        )
+                        .build()
+                gg.grounds.persistence.TransferAdmissionRepository.Result.Unavailable ->
+                    problem(
+                        409,
+                        "Transfer unavailable",
+                        "This connection cannot reserve this transfer.",
+                        "handoff_unavailable",
+                    )
+                gg.grounds.persistence.TransferAdmissionRepository.Result.Error ->
+                    problem(
+                        503,
+                        "Service unavailable",
+                        "Unable to reserve transfer.",
+                        "store_unavailable",
+                    )
+            }
+        metrics
+            .counter(
+                "player.transfer.admission",
+                "result",
+                when (response.status) {
+                    201 -> "admitted"
+                    409 -> "rejected"
+                    else -> "unavailable"
+                },
+            )
+            .increment()
+        metrics
+            .timer("player.transfer.admission.wait")
+            .record(System.nanoTime() - started, java.util.concurrent.TimeUnit.NANOSECONDS)
+        return response
     }
 
     @POST
@@ -121,6 +225,7 @@ class PlayerSessionV2Resource(
                     body.playerName,
                     body.proxyId,
                     body.region,
+                    body.connectionId,
                 )
         ) {
             is ExactSessionClaimOutcome.Accepted ->

@@ -10,6 +10,7 @@ import gg.grounds.persistence.PlayerSessionRepository.DeleteSessionResult
 import gg.grounds.persistence.PlayerSessionRepository.Playtime
 import gg.grounds.persistence.PlayerSessionRepository.ProxyPlayerCount
 import gg.grounds.persistence.PlayerSessionRepository.ServerPlayerCount
+import gg.grounds.persistence.TransferAdmissionRepository
 import gg.grounds.settings.PlayerSettingsCache
 import gg.grounds.settings.SettingsInvalidations
 import jakarta.enterprise.context.ApplicationScoped
@@ -176,7 +177,11 @@ constructor(
         return repository.updateServerForSession(id, connectionId, server)
     }
 
-    fun issueSessionHandoff(playerId: String?, sessionId: String?): HandoffIssueOutcome {
+    fun issueSessionHandoff(
+        playerId: String?,
+        sessionId: String?,
+        boundedAdmission: Boolean = false,
+    ): HandoffIssueOutcome {
         val id = parsePlayerId(playerId) ?: return HandoffIssueOutcome.InvalidId
         val connectionId = parsePlayerId(sessionId) ?: return HandoffIssueOutcome.InvalidId
         val now = Instant.now()
@@ -190,6 +195,7 @@ constructor(
                 tokenHash = hashHandoffToken(token),
                 expiresAt = expiresAt,
                 activeAfter = now.minus(sessionTtl),
+                boundedAdmission = boundedAdmission,
             )
         ) {
             PlayerSessionRepository.CreateHandoffResult.Created ->
@@ -201,6 +207,54 @@ constructor(
         }
     }
 
+    @jakarta.inject.Inject lateinit var transferAdmissions: TransferAdmissionRepository
+
+    fun abortTransferAdmission(
+        playerId: String?,
+        token: String?,
+        connectionId: String?,
+        proxyId: String?,
+    ): TransferAdmissionRepository.AbortResult {
+        val player =
+            parsePlayerId(playerId) ?: return TransferAdmissionRepository.AbortResult.Invalid
+        val connection =
+            parsePlayerId(connectionId) ?: return TransferAdmissionRepository.AbortResult.Invalid
+        val handoff =
+            token?.takeIf(HANDOFF_TOKEN_PATTERN::matches)
+                ?: return TransferAdmissionRepository.AbortResult.Invalid
+        val proxy =
+            proxyId?.takeIf { it.isNotBlank() && it.length <= 128 }
+                ?: return TransferAdmissionRepository.AbortResult.Invalid
+        return transferAdmissions.abort(player, hashHandoffToken(handoff), connection, proxy)
+    }
+
+    fun reserveTransferAdmission(
+        playerId: String?,
+        token: String?,
+        connectionId: String?,
+        proxyId: String?,
+    ): TransferAdmissionRepository.Result {
+        val player =
+            parsePlayerId(playerId) ?: return TransferAdmissionRepository.Result.Unavailable
+        val connection =
+            parsePlayerId(connectionId) ?: return TransferAdmissionRepository.Result.Unavailable
+        val handoff =
+            token?.takeIf(HANDOFF_TOKEN_PATTERN::matches)
+                ?: return TransferAdmissionRepository.Result.Unavailable
+        val proxy =
+            proxyId?.takeIf { it.isNotBlank() && it.length <= 128 }
+                ?: return TransferAdmissionRepository.Result.Unavailable
+        val now = Instant.now()
+        return transferAdmissions.reserve(
+            player,
+            hashHandoffToken(handoff),
+            connection,
+            proxy,
+            now,
+            now.minus(sessionTtl),
+        )
+    }
+
     fun consumeSessionHandoff(
         playerId: String?,
         sessionId: String?,
@@ -208,9 +262,15 @@ constructor(
         playerName: String?,
         proxyId: String?,
         region: String?,
+        admissionConnectionId: String? = null,
     ): ExactSessionClaimOutcome {
         val id = parsePlayerId(playerId) ?: return ExactSessionClaimOutcome.InvalidId
         val connectionId = parsePlayerId(sessionId) ?: return ExactSessionClaimOutcome.InvalidId
+        val admission = admissionConnectionId?.let {
+            parsePlayerId(it) ?: return ExactSessionClaimOutcome.InvalidId
+        }
+        if (admission != null && admission != connectionId)
+            return ExactSessionClaimOutcome.InvalidId
         val token =
             handoffToken?.takeIf(HANDOFF_TOKEN_PATTERN::matches)
                 ?: return ExactSessionClaimOutcome.InvalidId
@@ -226,6 +286,7 @@ constructor(
                 region = blankToNull(region),
                 now = now,
                 activeAfter = now.minus(sessionTtl),
+                admissionConnectionId = admission,
             )
         ) {
             PlayerSessionRepository.ConsumeHandoffResult.Consumed -> {

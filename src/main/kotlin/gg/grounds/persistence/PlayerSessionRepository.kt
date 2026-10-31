@@ -182,19 +182,36 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         tokenHash: ByteArray,
         expiresAt: Instant,
         activeAfter: Instant,
+        boundedAdmission: Boolean = false,
     ): CreateHandoffResult =
         try {
             dataSource.connection.use { connection ->
-                connection.prepareStatement(INSERT_HANDOFF_FOR_SESSION).use { statement ->
-                    statement.setBytes(1, tokenHash)
-                    statement.setTimestamp(2, Timestamp.from(expiresAt))
-                    statement.setObject(3, playerId)
-                    statement.setObject(4, sessionId)
-                    statement.setTimestamp(5, Timestamp.from(activeAfter))
-                    when (statement.executeUpdate()) {
-                        1 -> CreateHandoffResult.Created
-                        else -> CreateHandoffResult.NoActiveSession
+                connection.autoCommit = false
+                try {
+                    connection.createStatement().use {
+                        it.execute("SET LOCAL statement_timeout = '2s'")
+                        it.execute("SET LOCAL lock_timeout = '1s'")
+                        if (boundedAdmission)
+                            it.execute("SELECT pg_advisory_xact_lock(838823140546827414)")
                     }
+                    val result =
+                        connection.prepareStatement(INSERT_HANDOFF_FOR_SESSION).use { statement ->
+                            statement.setBytes(1, tokenHash)
+                            statement.setTimestamp(2, Timestamp.from(expiresAt))
+                            statement.setObject(3, playerId)
+                            statement.setObject(4, sessionId)
+                            statement.setTimestamp(5, Timestamp.from(activeAfter))
+                            statement.setBoolean(6, boundedAdmission)
+                            when (statement.executeUpdate()) {
+                                1 -> CreateHandoffResult.Created
+                                else -> CreateHandoffResult.NoActiveSession
+                            }
+                        }
+                    connection.commit()
+                    result
+                } catch (error: SQLException) {
+                    connection.rollback()
+                    throw error
                 }
             }
         } catch (error: SQLException) {
@@ -216,17 +233,33 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
         region: String?,
         now: Instant,
         activeAfter: Instant,
+        admissionConnectionId: UUID? = null,
     ): ConsumeHandoffResult =
         try {
             dataSource.connection.use { connection ->
                 connection.autoCommit = false
                 try {
+                    connection.createStatement().use {
+                        it.execute("SET LOCAL statement_timeout = '2s'")
+                        it.execute("SET LOCAL lock_timeout = '1s'")
+                    }
+                    connection
+                        .prepareStatement(
+                            "SELECT session_id FROM player_sessions WHERE player_id = ? FOR UPDATE"
+                        )
+                        .use {
+                            it.setObject(1, playerId)
+                            it.executeQuery().close()
+                        }
                     val sourceSessionId =
                         connection.prepareStatement(CONSUME_HANDOFF).use { statement ->
                             statement.setTimestamp(1, Timestamp.from(now))
                             statement.setBytes(2, tokenHash)
                             statement.setObject(3, playerId)
                             statement.setTimestamp(4, Timestamp.from(now))
+                            statement.setObject(5, admissionConnectionId)
+                            statement.setString(6, proxyId)
+                            statement.setObject(7, admissionConnectionId)
                             statement.executeQuery().use { resultSet ->
                                 if (resultSet.next()) {
                                     resultSet.getObject("source_session_id", UUID::class.java)
@@ -894,12 +927,23 @@ class PlayerSessionRepository @Inject constructor(private val dataSource: DataSo
             SELECT ?, player_id, session_id, ?
             FROM player_sessions
             WHERE player_id = ? AND session_id = ? AND last_seen_at >= ?
+              AND (NOT ? OR (SELECT count(*) FROM player_session_handoffs
+                   WHERE consumed_at IS NULL AND expires_at > CURRENT_TIMESTAMP) < 32)
             """
         private const val CONSUME_HANDOFF =
             """
-            UPDATE player_session_handoffs
+            UPDATE player_session_handoffs AS candidate
             SET consumed_at = ?
-            WHERE token_hash = ? AND player_id = ? AND consumed_at IS NULL AND expires_at > ?
+            WHERE token_hash = ? AND player_id = ? AND consumed_at IS NULL AND admission_closed_at IS NULL AND expires_at > GREATEST(?, clock_timestamp())
+              AND ((admission_connection_id = ? AND admission_proxy_id = ?)
+                OR (admission_connection_id IS NULL AND CAST(? AS UUID) IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM player_session_handoffs AS other
+                        WHERE other.player_id = candidate.player_id
+                          AND other.source_session_id = candidate.source_session_id
+                          AND other.admission_connection_id IS NOT NULL
+                          AND other.expires_at > clock_timestamp()
+                    )))
             RETURNING source_session_id
             """
         private const val CONSUME_SESSION_HANDOFF =

@@ -116,11 +116,29 @@ data class ExactSessionHeartbeatRequest(
 
 data class ExactSessionServerRequest(val sessionId: String?, val serverName: String?)
 
-data class ExactSessionHandoffIssueRequest(val sessionId: String?)
+data class ExactSessionHandoffIssueRequest(
+    val sessionId: String?,
+    val boundedAdmission: Boolean = false,
+)
 
 data class ExactSessionHandoffIssueResponse(val token: String, val expiresAt: Instant)
 
+data class TransferAdmissionRequest(
+    val playerId: String?,
+    val handoffToken: String?,
+    val connectionId: String?,
+    val destinationProxyId: String?,
+)
+
+data class TransferAdmissionResponse(
+    val playerId: String,
+    val connectionId: String,
+    val destinationProxyId: String,
+    val expiresAt: Instant,
+)
+
 data class ExactSessionHandoffConsumeRequest(
+    val connectionId: String? = null,
     val playerId: String?,
     val sessionId: String?,
     val handoffToken: String?,
