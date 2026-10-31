@@ -316,6 +316,260 @@ class PlayerSessionV2ResourceTest {
             )
             .post("/v2/players/sessions")
 
+    @Test
+    fun `admission binds a ticket to one destination connection and blocks legacy consume`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val destination = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val token = issueHandoff(player, source)
+        val expiry =
+            admit(token, player, destination, "target-a")
+                .then()
+                .statusCode(201)
+                .body("connectionId", equalTo(destination.toString()))
+                .extract()
+                .path<String>("expiresAt")
+        admit(token, player, destination, "target-a")
+            .then()
+            .statusCode(201)
+            .body("expiresAt", equalTo(expiry))
+        admit(token, player, UUID.randomUUID(), "target-b").then().statusCode(409)
+        admit(token, UUID.randomUUID(), destination, "target-a").then().statusCode(409)
+        consume(token, player, destination, "target-a").then().statusCode(409)
+        consumeBound(token, player, destination, "target-b").then().statusCode(409)
+        consumeBound(token, player, destination, "target-a").then().statusCode(201)
+        admit(token, player, destination, "target-a").then().statusCode(409)
+    }
+
+    @Test
+    fun `two tokens of one source session cannot admit two connections`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val first = issueHandoff(player, source)
+        val second = issueHandoff(player, source)
+        val connection = UUID.randomUUID()
+        admit(first, player, connection, "target-a").then().statusCode(201)
+        admit(second, player, UUID.randomUUID(), "target-b").then().statusCode(409)
+        consume(second, player, UUID.randomUUID(), "legacy-target").then().statusCode(409)
+        given().delete("/v2/players/$player/session?sessionId=$source")
+        consumeBound(first, player, connection, "target-a").then().statusCode(201)
+    }
+
+    @Test
+    fun `expired admission cannot be renewed or consumed`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val connection = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val token = issueHandoff(player, source)
+        admit(token, player, connection, "target").then().statusCode(201)
+        dataSource.connection.use { db ->
+            db.prepareStatement(
+                    "UPDATE player_session_handoffs SET expires_at = NOW() - INTERVAL '1 second' WHERE player_id = ?"
+                )
+                .use {
+                    it.setObject(1, player)
+                    it.executeUpdate()
+                }
+        }
+        admit(token, player, connection, "target").then().statusCode(409)
+        consumeBound(token, player, connection, "target").then().statusCode(409)
+    }
+
+    @Test
+    fun `concurrent admission on different proxies has one winner`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val tokens = listOf(issueHandoff(player, source), issueHandoff(player, source))
+        val start = java.util.concurrent.CountDownLatch(1)
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val tasks = tokens.mapIndexed { index, token ->
+                pool.submit<Int> {
+                    start.await()
+                    admit(token, player, UUID.randomUUID(), "target-$index").statusCode
+                }
+            }
+            start.countDown()
+            assertEquals(listOf(201, 409), tasks.map { it.get() }.sorted())
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `handoff issuance applies one shared outstanding budget across source proxies`() {
+        // Isolated PostgreSQL fixture: seed all budget slots with active source tickets.
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        claim(player, source, "source-budget").then().statusCode(201)
+        dataSource.connection.use { db ->
+            db.prepareStatement(
+                    "INSERT INTO player_session_handoffs(token_hash, player_id, source_session_id, expires_at) SELECT decode(md5(random()::text), 'hex'), ?, ?, NOW() + INTERVAL '15 seconds' FROM generate_series(1,32)"
+                )
+                .use {
+                    it.setObject(1, player)
+                    it.setObject(2, source)
+                    it.executeUpdate()
+                }
+        }
+        try {
+            given()
+                .contentType(ContentType.JSON)
+                .body(mapOf("sessionId" to source.toString()))
+                .post("/v2/players/$player/session/transfer")
+                .then()
+                .statusCode(409)
+        } finally {
+            dataSource.connection.use { db ->
+                db.prepareStatement("DELETE FROM player_session_handoffs WHERE player_id = ?").use {
+                    it.setObject(1, player)
+                    it.executeUpdate()
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `aborted admission cannot be consumed or rebound and preserves the source`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val connection = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val token = issueHandoff(player, source)
+        admit(token, player, connection, "target").then().statusCode(201)
+        abortAdmission(token, player, connection, "target").then().statusCode(204)
+        abortAdmission(token, player, connection, "target").then().statusCode(204)
+        admit(token, player, connection, "target").then().statusCode(409)
+        admit(token, player, UUID.randomUUID(), "other").then().statusCode(409)
+        consumeBound(token, player, connection, "target").then().statusCode(409)
+        given()
+            .get("/v1/players/$player/session")
+            .then()
+            .statusCode(200)
+            .body("proxyId", equalTo("source"))
+    }
+
+    @Test
+    fun `abort cleans a committed destination but never a later connection`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val connection = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val token = issueHandoff(player, source)
+        admit(token, player, connection, "target").then().statusCode(201)
+        consumeBound(token, player, connection, "target").then().statusCode(201)
+        abortAdmission(token, player, connection, "target").then().statusCode(204)
+        given().get("/v1/players/$player/session").then().statusCode(404)
+        claim(player, UUID.randomUUID(), "later").then().statusCode(201)
+        abortAdmission(token, player, connection, "target").then().statusCode(204)
+        given()
+            .get("/v1/players/$player/session")
+            .then()
+            .statusCode(200)
+            .body("proxyId", equalTo("later"))
+    }
+
+    @Test
+    fun `concurrent abort and consume leaves no orphaned destination`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val connection = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val token = issueHandoff(player, source)
+        admit(token, player, connection, "target").then().statusCode(201)
+        val start = java.util.concurrent.CountDownLatch(1)
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val abort =
+                pool.submit<Int> {
+                    start.await()
+                    abortAdmission(token, player, connection, "target").statusCode
+                }
+            val consume =
+                pool.submit<Int> {
+                    start.await()
+                    consumeBound(token, player, connection, "target").statusCode
+                }
+            start.countDown()
+            assertEquals(204, abort.get())
+            val status = consume.get()
+            org.junit.jupiter.api.Assertions.assertTrue(status == 201 || status == 409)
+            val current = given().get("/v1/players/$player/session")
+            org.junit.jupiter.api.Assertions.assertTrue(
+                current.statusCode == 404 || current.jsonPath().getString("proxyId") == "source"
+            )
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
+    fun `a fresh source ticket after expiry never reopens the expired connection`() {
+        val player = UUID.randomUUID()
+        val source = UUID.randomUUID()
+        val connection = UUID.randomUUID()
+        claim(player, source, "source").then().statusCode(201)
+        val first = issueHandoff(player, source)
+        admit(first, player, connection, "target").then().statusCode(201)
+        dataSource.connection.use { db ->
+            db.prepareStatement(
+                    "UPDATE player_session_handoffs SET expires_at = NOW() - INTERVAL '1 second' WHERE player_id = ?"
+                )
+                .use {
+                    it.setObject(1, player)
+                    it.executeUpdate()
+                }
+        }
+        val fresh = issueHandoff(player, source)
+        admit(fresh, player, UUID.randomUUID(), "other").then().statusCode(201)
+        admit(first, player, connection, "target").then().statusCode(409)
+        consumeBound(first, player, connection, "target").then().statusCode(409)
+    }
+
+    private fun abortAdmission(token: String, player: UUID, connection: UUID, proxy: String) =
+        given()
+            .contentType(ContentType.JSON)
+            .body(
+                mapOf(
+                    "playerId" to player.toString(),
+                    "handoffToken" to token,
+                    "connectionId" to connection.toString(),
+                    "destinationProxyId" to proxy,
+                )
+            )
+            .post("/v2/players/sessions/transfer/admission/abort")
+
+    private fun admit(token: String, player: UUID, connection: UUID, proxy: String) =
+        given()
+            .contentType(ContentType.JSON)
+            .body(
+                mapOf(
+                    "playerId" to player.toString(),
+                    "handoffToken" to token,
+                    "connectionId" to connection.toString(),
+                    "destinationProxyId" to proxy,
+                )
+            )
+            .post("/v2/players/sessions/transfer/admission")
+
+    private fun consumeBound(token: String, player: UUID, connection: UUID, proxy: String) =
+        given()
+            .contentType(ContentType.JSON)
+            .body(
+                mapOf(
+                    "playerId" to player.toString(),
+                    "handoffToken" to token,
+                    "sessionId" to connection.toString(),
+                    "connectionId" to connection.toString(),
+                    "proxyId" to proxy,
+                )
+            )
+            .post("/v2/players/sessions/transfer")
+
     private fun issueHandoff(playerId: UUID, sessionId: UUID): String =
         given()
             .contentType(ContentType.JSON)
