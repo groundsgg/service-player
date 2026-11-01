@@ -21,12 +21,12 @@ def docker(*args, check=True):
 
 TOKENS = {}
 
-def create_player_stream(port):
+def nats_request(port, subject, body):
     with socket.create_connection(('127.0.0.1', int(port)), timeout=5) as connection:
         reader = connection.makefile('rb')
         assert reader.readline().startswith(b'INFO ')
-        body = json.dumps({'name': 'PLAYER_EVENTS', 'subjects': ['player.>']}).encode()
-        connection.sendall(b'CONNECT {"verbose":false}\r\nSUB _INBOX.fixture 1\r\nPUB $JS.API.STREAM.CREATE.PLAYER_EVENTS _INBOX.fixture ' + str(len(body)).encode() + b'\r\n' + body + b'\r\n')
+        body = json.dumps(body).encode()
+        connection.sendall(b'CONNECT {"verbose":false}\r\nSUB _INBOX.fixture 1\r\nPUB ' + subject.encode() + b' _INBOX.fixture ' + str(len(body)).encode() + b'\r\n' + body + b'\r\n')
         while True:
             line = reader.readline()
             if line == b'PING\r\n':
@@ -34,7 +34,18 @@ def create_player_stream(port):
             elif line.startswith(b'MSG '):
                 response = json.loads(reader.read(int(line.split()[-1])))
                 assert 'error' not in response, response
-                return
+                return response
+
+def create_player_stream(port):
+    return nats_request(port, '$JS.API.STREAM.CREATE.PLAYER_EVENTS', {'name': 'PLAYER_EVENTS', 'subjects': ['player.name.seen.*', 'player.session.server-changed.*', 'player.session.ended.*']})
+
+def await_writer_idle(port):
+    for _ in range(60):
+        state = nats_request(port, '$JS.API.CONSUMER.INFO.PLAYER_EVENTS.player-writer', {})
+        if state['num_pending'] == 0 and state['num_ack_pending'] == 0:
+            return
+        time.sleep(0.1)
+    raise AssertionError('Player event consumer did not finish pending writes')
 
 def request(base, path, body=None, method=None, authenticated=True):
     data = json.dumps(body).encode() if body is not None else None
@@ -210,7 +221,9 @@ def main():
         status, result = request(b, '/v2/players/sessions/heartbeats', {'sessions': [{'playerId': player, 'sessionId': destination}]})
         assert status == 200 and result['updated'] == 1 and result['missing'] == 0, (status, result)
         status, _ = request(a, f'/v2/players/{player}/session?sessionId={source}', method='DELETE')
-        assert status == 404, status
+        # Async logout acknowledges queueing; the writer must fence the stale session.
+        assert status == 204, status
+        await_writer_idle(nats_port)
         status, result = request(a, f'/v1/players/{player}/session')
         assert status == 200 and result['proxyId'] == 'proxy-b', (status, result)
         status, _ = request(b, f'/v2/players/{player}/session?sessionId={destination}', method='DELETE')
@@ -226,6 +239,7 @@ def main():
         reconnect = dict(claim, sessionId=str(uuid.uuid4()), proxyId='proxy-b')
         status, result = request(b, '/v2/players/sessions', reconnect)
         assert status == 201 and result['sessionId'] == reconnect['sessionId'], (status, result)
+        await_writer_idle(nats_port)
         for name in (first, second):
             logs = docker('logs', name)
             assert 'ClassNotFoundException' not in logs and ' ERROR ' not in logs and 'KotlinReflectionInternalError' not in logs, 'native runtime failed'
