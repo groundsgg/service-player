@@ -1,5 +1,6 @@
 package gg.grounds.events
 
+import io.quarkus.runtime.annotations.RegisterForReflection
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
@@ -26,8 +27,10 @@ object PlayerEvents {
     /** What the writer's durable consumes; PLAYER_EVENTS holds nothing else. */
     const val CONSUMER_FILTER = "player.>"
 
+    @RegisterForReflection
     data class NameSeen(val playerId: String, val playerName: String, val seenAt: String)
 
+    @RegisterForReflection
     data class ServerChanged(
         val playerId: String,
         val sessionId: String,
@@ -35,6 +38,7 @@ object PlayerEvents {
         val changedAt: String,
     )
 
+    @RegisterForReflection
     data class SessionEnded(val playerId: String, val sessionId: String, val endedAt: String)
 
     fun stamp(at: Instant): Instant = at.truncatedTo(ChronoUnit.MICROS)

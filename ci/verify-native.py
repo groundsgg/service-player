@@ -4,6 +4,7 @@ import json
 import base64
 import http.server
 import pathlib
+import socket
 import tempfile
 import threading
 import os
@@ -19,6 +20,21 @@ def docker(*args, check=True):
 
 
 TOKENS = {}
+
+def create_player_stream(port):
+    with socket.create_connection(('127.0.0.1', int(port)), timeout=5) as connection:
+        reader = connection.makefile('rb')
+        assert reader.readline().startswith(b'INFO ')
+        body = json.dumps({'name': 'PLAYER_EVENTS', 'subjects': ['player.>']}).encode()
+        connection.sendall(b'CONNECT {"verbose":false}\r\nSUB _INBOX.fixture 1\r\nPUB $JS.API.STREAM.CREATE.PLAYER_EVENTS _INBOX.fixture ' + str(len(body)).encode() + b'\r\n' + body + b'\r\n')
+        while True:
+            line = reader.readline()
+            if line == b'PING\r\n':
+                connection.sendall(b'PONG\r\n')
+            elif line.startswith(b'MSG '):
+                response = json.loads(reader.read(int(line.split()[-1])))
+                assert 'error' not in response, response
+                return
 
 def request(base, path, body=None, method=None, authenticated=True):
     data = json.dumps(body).encode() if body is not None else None
@@ -89,9 +105,19 @@ def main():
             time.sleep(1)
         else:
             raise AssertionError('PostgreSQL did not start')
-        docker('run', '-d', '--name', nats, '--network', network, 'nats:2.12.1-alpine')
+        docker('run', '-d', '--name', nats, '--network', network, '-p', '127.0.0.1::4222', 'nats:2.12.1-alpine', '-js')
+        nats_port = docker('port', nats, '4222/tcp').rsplit(':', 1)[1]
+        for _ in range(30):
+            try:
+                create_player_stream(nats_port)
+                break
+            except (OSError, ConnectionError):
+                time.sleep(1)
+        else:
+            raise AssertionError('JetStream did not start')
         url = f'jdbc:postgresql://{database}:5432/app?currentSchema=player'
         env = {'POSTGRES_URL': url, 'POSTGRES_DIRECT_URL': url, 'POSTGRES_USER': 'app', 'POSTGRES_PASSWORD': 'app', 'NATS_URL': f'nats://{nats}:4222', 'GROUNDS_AUTH_ENABLED': 'true', 'GROUNDS_AUTH_JWKS_URL': f'http://host.docker.internal:{issuer.server.server_port}/jwks', 'GROUNDS_AUTH_K8S_CA_FILE': '/fixture/no-cluster-ca', 'PLAYER_SETTINGS_CACHE_ENABLED': 'true', 'PLAYER_ROLE': 'all'}
+        env.update({'PLAYER_ASYNC_WRITES': 'true', 'PLAYER_ASYNC_LOGOUT': 'true', 'PLAYER_EVENTS_CONSUMER_ENABLED': 'true'})
         bases = []
         for name in (first, second):
             args = ['run', '-d', '--name', name, '--network', network, '--add-host', 'host.docker.internal:host-gateway', '-p', '127.0.0.1::9000']
@@ -126,6 +152,28 @@ def main():
         claim = {'playerId': player, 'sessionId': source, 'playerName': 'NativeFixture', 'proxyId': 'proxy-a', 'region': 'eu'}
         status, result = request(a, '/v2/players/sessions', claim)
         assert status == 201 and result['playerId'] == player and result['sessionId'] == source and result.get('leaseExpiresAt'), (status, result)
+        # The regional async name event must be consumed before directory lookup succeeds.
+        for _ in range(30):
+            status, result = request(b, '/v1/players/names/known?name=NativeFixture')
+            assert status == 200, (status, result)
+            if result['players'] == [{'playerId': player, 'playerName': 'NativeFixture'}]:
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError(f'NameSeen event not applied: {status}, {result}')
+        status, result = request(a, '/v1/players/names/known?prefix=Native')
+        assert status == 200 and result['players'] == [{'playerId': player, 'playerName': 'NativeFixture'}], (status, result)
+        status, result = request(a, '/v1/players/names/known?name=UnknownFixture')
+        assert status == 200 and result['players'] == [], (status, result)
+        status, _ = request(a, f'/v2/players/{player}/session/server', {'sessionId': source, 'serverName': 'lobby-fixture'}, 'PUT')
+        assert status == 204, status
+        for _ in range(30):
+            status, result = request(b, f'/v1/players/{player}/session')
+            if status == 200 and result['serverName'] == 'lobby-fixture':
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError(f'ServerChanged event not applied: {status}, {result}')
         status, result = request(b, f'/v1/players/{player}/session')
         assert status == 200 and result['proxyId'] == 'proxy-a', (status, result)
         duplicate = dict(claim, sessionId=destination, proxyId='proxy-b')
@@ -165,9 +213,22 @@ def main():
         assert status == 404, status
         status, result = request(a, f'/v1/players/{player}/session')
         assert status == 200 and result['proxyId'] == 'proxy-b', (status, result)
+        status, _ = request(b, f'/v2/players/{player}/session?sessionId={destination}', method='DELETE')
+        assert status == 204, status
+        for _ in range(30):
+            status, _ = request(a, f'/v1/players/{player}/session')
+            if status == 404:
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError('SessionEnded event did not remove the active session')
+        # A real disconnect must permit a subsequent login on either proxy.
+        reconnect = dict(claim, sessionId=str(uuid.uuid4()), proxyId='proxy-b')
+        status, result = request(b, '/v2/players/sessions', reconnect)
+        assert status == 201 and result['sessionId'] == reconnect['sessionId'], (status, result)
         for name in (first, second):
             logs = docker('logs', name)
-            assert 'ClassNotFoundException' not in logs and 'IllegalStateException: SSMSW' not in logs, 'native cache initialization failed'
+            assert 'ClassNotFoundException' not in logs and ' ERROR ' not in logs and 'KotlinReflectionInternalError' not in logs, 'native runtime failed'
         print('Native Player: JWT verification, authenticated cross-proxy claim, one-use handoff, global presence, NATS settings invalidation and stale logout passed')
     except BaseException:
         for name in (first, second):

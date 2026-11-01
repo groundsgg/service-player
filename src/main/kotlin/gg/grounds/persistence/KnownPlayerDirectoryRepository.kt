@@ -4,13 +4,14 @@ import gg.grounds.data.Cached
 import gg.grounds.data.Fresh
 import gg.grounds.persistence.PlayerSessionRepository.Companion.escapeLikePattern
 import gg.grounds.persistence.PlayerSessionRepository.Companion.prefixUpperBound
+import io.quarkus.runtime.annotations.RegisterForReflection
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.sql.ResultSet
 import java.util.UUID
 import javax.sql.DataSource
 
-data class KnownPlayerName(val playerId: UUID, val playerName: String)
+@RegisterForReflection data class KnownPlayerName(val playerId: UUID, val playerName: String)
 
 /** Identity reads from the durable name index; these do not assert online presence. */
 @ApplicationScoped
@@ -41,16 +42,17 @@ class KnownPlayerDirectoryRepository @Inject constructor(private val dataSource:
             }
         }
 
-    private fun readNames(rows: ResultSet): List<KnownPlayerName> = buildList {
-        while (rows.next()) {
-            add(
-                KnownPlayerName(
-                    rows.getObject("player_id", UUID::class.java),
-                    rows.getString("player_name"),
+    private fun readNames(rows: ResultSet): List<KnownPlayerName> =
+        arrayListOf<KnownPlayerName>().apply {
+            while (rows.next()) {
+                add(
+                    KnownPlayerName(
+                        rows.getObject("player_id", UUID::class.java),
+                        rows.getString("player_name"),
+                    )
                 )
-            )
+            }
         }
-    }
 
     private companion object {
         const val SEARCH =
