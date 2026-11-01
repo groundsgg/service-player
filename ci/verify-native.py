@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Exercise native Player joins and cross-proxy state using local PostgreSQL and NATS."""
 import json
+import base64
+import http.server
+import pathlib
+import tempfile
+import threading
 import os
 import subprocess
 import time
@@ -13,9 +18,14 @@ def docker(*args, check=True):
     return subprocess.run(['docker', *args], check=check, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout.strip()
 
 
-def request(base, path, body=None, method=None):
+TOKENS = {}
+
+def request(base, path, body=None, method=None, authenticated=True):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(base + path, data=data, method=method, headers={'Content-Type': 'application/json'})
+    headers = {'Content-Type': 'application/json'}
+    if authenticated:
+        headers['Authorization'] = 'Bearer ' + TOKENS[base]
+    req = urllib.request.Request(base + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             payload = response.read()
@@ -25,10 +35,51 @@ def request(base, path, body=None, method=None):
         return error.code, json.loads(payload) if payload else None
 
 
+
+class WorkloadIssuer:
+    def __init__(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.key = pathlib.Path(self.directory.name) / 'fixture.pem'
+        subprocess.run(['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048', '-out', str(self.key)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        modulus = subprocess.check_output(['openssl', 'rsa', '-in', str(self.key), '-noout', '-modulus'], text=True).strip().split('=', 1)[1]
+        self.keys = {'keys': [{'kty': 'RSA', 'use': 'sig', 'alg': 'RS256', 'kid': 'native-player-fixture', 'e': 'AQAB', 'n': self.encode(bytes.fromhex(modulus))}]}
+        keys = self.keys
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_GET(self):
+                body = json.dumps(keys).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+        self.server = http.server.ThreadingHTTPServer(('0.0.0.0', 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    @staticmethod
+    def encode(value):
+        return base64.urlsafe_b64encode(value).rstrip(b'=').decode()
+
+    def token(self, proxy, audience='grounds-services'):
+        now = int(time.time())
+        header = self.encode(json.dumps({'alg': 'RS256', 'kid': 'native-player-fixture'}).encode())
+        claims = self.encode(json.dumps({'iss': 'https://native-player-fixture.invalid', 'sub': 'system:serviceaccount:test:' + proxy, 'aud': audience, 'iat': now, 'exp': now + 600}).encode())
+        unsigned = (header + '.' + claims).encode()
+        signature = subprocess.run(['openssl', 'dgst', '-sha256', '-sign', str(self.key)], input=unsigned, stdout=subprocess.PIPE, check=True).stdout
+        return unsigned.decode() + '.' + self.encode(signature)
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.directory.cleanup()
+
+
 def main():
     image = os.environ.get('NATIVE_IMAGE_PREFIX', 'grounds/service-player') + ':native-micro-pilot'
     suffix = uuid.uuid4().hex[:12]
     network, database, nats, first, second = (f'player-native-{part}-{suffix}' for part in ('net', 'db', 'nats', 'a', 'b'))
+    issuer = WorkloadIssuer()
     try:
         docker('network', 'create', network)
         docker('run', '-d', '--name', database, '--network', network, '-e', 'POSTGRES_USER=app', '-e', 'POSTGRES_PASSWORD=app', '-e', 'POSTGRES_DB=app', 'postgres:17-alpine')
@@ -40,15 +91,16 @@ def main():
             raise AssertionError('PostgreSQL did not start')
         docker('run', '-d', '--name', nats, '--network', network, 'nats:2.12.1-alpine')
         url = f'jdbc:postgresql://{database}:5432/app?currentSchema=player'
-        env = {'POSTGRES_URL': url, 'POSTGRES_DIRECT_URL': url, 'POSTGRES_USER': 'app', 'POSTGRES_PASSWORD': 'app', 'NATS_URL': f'nats://{nats}:4222', 'GROUNDS_AUTH_ENABLED': 'false', 'PLAYER_SETTINGS_CACHE_ENABLED': 'true', 'PLAYER_ROLE': 'all'}
+        env = {'POSTGRES_URL': url, 'POSTGRES_DIRECT_URL': url, 'POSTGRES_USER': 'app', 'POSTGRES_PASSWORD': 'app', 'NATS_URL': f'nats://{nats}:4222', 'GROUNDS_AUTH_ENABLED': 'true', 'GROUNDS_AUTH_JWKS_URL': f'http://host.docker.internal:{issuer.server.server_port}/jwks', 'GROUNDS_AUTH_K8S_CA_FILE': '/fixture/no-cluster-ca', 'PLAYER_SETTINGS_CACHE_ENABLED': 'true', 'PLAYER_ROLE': 'all'}
         bases = []
         for name in (first, second):
-            args = ['run', '-d', '--name', name, '--network', network, '-p', '127.0.0.1::9000']
+            args = ['run', '-d', '--name', name, '--network', network, '--add-host', 'host.docker.internal:host-gateway', '-p', '127.0.0.1::9000']
             for key, value in env.items():
                 args.extend(['-e', f'{key}={value}'])
             docker(*args, image)
             port = docker('port', name, '9000/tcp').rsplit(':', 1)[1]
             base = f'http://127.0.0.1:{port}'
+            TOKENS[base] = issuer.token('proxy-a' if name == first else 'proxy-b')
             for _ in range(90):
                 try:
                     status, health = request(base, '/q/health/ready')
@@ -63,6 +115,13 @@ def main():
                 raise AssertionError('native service not ready')
             bases.append(base)
         a, b = bases
+        status, _ = request(a, '/v1/players/counts/proxies', authenticated=False)
+        assert status == 401, status
+        valid = TOKENS[b]
+        TOKENS[b] = issuer.token('proxy-b', audience='wrong-audience')
+        status, _ = request(b, '/v1/players/counts/proxies')
+        assert status == 401, status
+        TOKENS[b] = valid
         player, source, destination = (str(uuid.uuid4()) for _ in range(3))
         claim = {'playerId': player, 'sessionId': source, 'playerName': 'NativeFixture', 'proxyId': 'proxy-a', 'region': 'eu'}
         status, result = request(a, '/v2/players/sessions', claim)
@@ -96,6 +155,8 @@ def main():
         assert status == 201 and handoff.get('token'), (status, handoff)
         status, result = request(b, '/v2/players/sessions/transfer', {'playerId': player, 'sessionId': destination, 'handoffToken': handoff['token'], 'proxyId': 'proxy-b', 'region': 'eu'})
         assert status == 201 and result['sessionId'] == destination, (status, result)
+        status, _ = request(a, '/v2/players/sessions/transfer', {'playerId': player, 'sessionId': str(uuid.uuid4()), 'handoffToken': handoff['token'], 'proxyId': 'proxy-a', 'region': 'eu'})
+        assert status == 409, status
         status, result = request(a, f'/v1/players/{player}/session')
         assert status == 200 and result['proxyId'] == 'proxy-b', (status, result)
         status, result = request(b, '/v2/players/sessions/heartbeats', {'sessions': [{'playerId': player, 'sessionId': destination}]})
@@ -107,7 +168,7 @@ def main():
         for name in (first, second):
             logs = docker('logs', name)
             assert 'ClassNotFoundException' not in logs and 'IllegalStateException: SSMSW' not in logs, 'native cache initialization failed'
-        print('Native Player: cross-proxy claim, handoff, global presence, NATS settings invalidation and stale logout passed')
+        print('Native Player: JWT verification, authenticated cross-proxy claim, one-use handoff, global presence, NATS settings invalidation and stale logout passed')
     except BaseException:
         for name in (first, second):
             print(docker('logs', name, check=False))
@@ -116,6 +177,7 @@ def main():
         for name in (first, second, nats, database):
             docker('rm', '-f', name, check=False)
         docker('network', 'rm', network, check=False)
+        issuer.close()
 
 
 if __name__ == '__main__':
