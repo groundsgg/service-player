@@ -1,5 +1,6 @@
 package gg.grounds.events
 
+import io.quarkus.runtime.annotations.RegisterForReflection
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
@@ -18,6 +19,7 @@ import java.util.UUID
  * Timestamps are ISO-8601 UTC truncated to microseconds — Postgres' precision, so the writer's
  * "never older than what is stored" comparisons see exactly the value the region stamped.
  */
+@RegisterForReflection
 object PlayerEvents {
     const val NAME_SEEN_PREFIX = "player.name.seen."
     const val SERVER_CHANGED_PREFIX = "player.session.server-changed."

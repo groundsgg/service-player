@@ -3,6 +3,7 @@ package gg.grounds.rest
 import gg.grounds.domain.PlayerSession
 import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.presence.PresenceService
+import io.quarkus.runtime.annotations.RegisterForReflection
 import java.time.Instant
 import org.eclipse.microprofile.openapi.annotations.media.Schema
 
@@ -102,6 +103,7 @@ data class ExactSessionClaimRequest(
 )
 
 @Schema(name = "ExactSessionClaimResponse", description = "The admitted connection and lease.")
+@RegisterForReflection
 data class ExactSessionClaimResponse(
     val playerId: String,
     val sessionId: String,
@@ -121,6 +123,7 @@ data class ExactSessionHandoffIssueRequest(
     val boundedAdmission: Boolean = false,
 )
 
+@RegisterForReflection
 data class ExactSessionHandoffIssueResponse(val token: String, val expiresAt: Instant)
 
 data class TransferAdmissionRequest(
@@ -130,6 +133,7 @@ data class TransferAdmissionRequest(
     val destinationProxyId: String?,
 )
 
+@RegisterForReflection
 data class TransferAdmissionResponse(
     val playerId: String,
     val connectionId: String,
@@ -148,6 +152,7 @@ data class ExactSessionHandoffConsumeRequest(
 )
 
 @Schema(name = "HeartbeatResponse", description = "What the batch did.")
+@RegisterForReflection
 data class HeartbeatResponse(
     @get:Schema(description = "Sessions touched.") val updated: Int,
     @get:Schema(
