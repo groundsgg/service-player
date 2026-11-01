@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.8.0](https://github.com/groundsgg/service-player/compare/v2.7.2...v2.8.0) (2026-11-01)
+
+
+### Features
+
+* **player:** add portable native runtime and reusable CI ([#154](https://github.com/groundsgg/service-player/issues/154)) ([5558260](https://github.com/groundsgg/service-player/commit/55582601106eaa290490b735accc3480c43fa9a2))
+
 ## [2.7.2](https://github.com/groundsgg/service-player/compare/v2.7.1...v2.7.2) (2026-10-31)
 
 
