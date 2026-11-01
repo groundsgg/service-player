@@ -47,6 +47,11 @@ constructor(
     private val settingsCache: PlayerSettingsCache,
     private val settingsInvalidations: SettingsInvalidations,
 ) {
+    // This is intentionally instance state. A companion-object SecureRandom is
+    // allocated while native-image analyzes this class and would be embedded in
+    // every process image instead of obtaining entropy at runtime.
+    private val secureRandom = SecureRandom()
+
     @ConfigProperty(name = "grounds.player.sessions.ttl", defaultValue = "90s")
     private lateinit var sessionTtl: Duration
 
@@ -186,7 +191,7 @@ constructor(
         val connectionId = parsePlayerId(sessionId) ?: return HandoffIssueOutcome.InvalidId
         val now = Instant.now()
         val expiresAt = now.plus(HANDOFF_TTL)
-        val randomBytes = ByteArray(HANDOFF_TOKEN_BYTES).also(SECURE_RANDOM::nextBytes)
+        val randomBytes = ByteArray(HANDOFF_TOKEN_BYTES).also(secureRandom::nextBytes)
         val token = Base64.getUrlEncoder().withoutPadding().encodeToString(randomBytes)
         return when (
             repository.createHandoff(
@@ -547,7 +552,6 @@ constructor(
         private const val HANDOFF_TOKEN_BYTES = 32
         private val HANDOFF_TTL = Duration.ofSeconds(15)
         private val HANDOFF_TOKEN_PATTERN = Regex("[A-Za-z0-9_-]{43}")
-        private val SECURE_RANDOM = SecureRandom()
         private val LOG = Logger.getLogger(PresenceService::class.java)
 
         private const val MAX_SUGGEST_LIMIT = 25
