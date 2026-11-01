@@ -1,9 +1,9 @@
 package gg.grounds.rest
 
-import io.quarkus.runtime.annotations.RegisterForReflection
 import gg.grounds.domain.PlayerSession
 import gg.grounds.persistence.PlayerSessionRepository
 import gg.grounds.presence.PresenceService
+import io.quarkus.runtime.annotations.RegisterForReflection
 import java.time.Instant
 import org.eclipse.microprofile.openapi.annotations.media.Schema
 
