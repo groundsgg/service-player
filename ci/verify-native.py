@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Exercise native Player joins and cross-proxy state using local PostgreSQL and NATS."""
+import json
+import os
+import subprocess
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+
+def docker(*args, check=True):
+    return subprocess.run(['docker', *args], check=check, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True).stdout.strip()
+
+
+def request(base, path, body=None, method=None):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(base + path, data=data, method=method, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = response.read()
+            return response.status, json.loads(payload) if payload else None
+    except urllib.error.HTTPError as error:
+        payload = error.read()
+        return error.code, json.loads(payload) if payload else None
+
+
+def main():
+    image = os.environ.get('NATIVE_IMAGE_PREFIX', 'grounds/service-player') + ':native-micro-pilot'
+    suffix = uuid.uuid4().hex[:12]
+    network, database, nats, first, second = (f'player-native-{part}-{suffix}' for part in ('net', 'db', 'nats', 'a', 'b'))
+    try:
+        docker('network', 'create', network)
+        docker('run', '-d', '--name', database, '--network', network, '-e', 'POSTGRES_USER=app', '-e', 'POSTGRES_PASSWORD=app', '-e', 'POSTGRES_DB=app', 'postgres:17-alpine')
+        for _ in range(90):
+            if subprocess.run(['docker', 'exec', database, 'pg_isready', '-U', 'app'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError('PostgreSQL did not start')
+        docker('run', '-d', '--name', nats, '--network', network, 'nats:2.12.1-alpine')
+        url = f'jdbc:postgresql://{database}:5432/app?currentSchema=player'
+        env = {'POSTGRES_URL': url, 'POSTGRES_DIRECT_URL': url, 'POSTGRES_USER': 'app', 'POSTGRES_PASSWORD': 'app', 'NATS_URL': f'nats://{nats}:4222', 'GROUNDS_AUTH_ENABLED': 'false', 'PLAYER_SETTINGS_CACHE_ENABLED': 'true', 'PLAYER_ROLE': 'all'}
+        bases = []
+        for name in (first, second):
+            args = ['run', '-d', '--name', name, '--network', network, '-p', '127.0.0.1::9000']
+            for key, value in env.items():
+                args.extend(['-e', f'{key}={value}'])
+            docker(*args, image)
+            port = docker('port', name, '9000/tcp').rsplit(':', 1)[1]
+            base = f'http://127.0.0.1:{port}'
+            for _ in range(90):
+                try:
+                    status, health = request(base, '/q/health/ready')
+                    if status == 200 and health['status'] == 'UP':
+                        break
+                except OSError:
+                    pass
+                if docker('inspect', '-f', '{{.State.Running}}', name) != 'true':
+                    raise AssertionError('native service exited before readiness')
+                time.sleep(1)
+            else:
+                raise AssertionError('native service not ready')
+            bases.append(base)
+        a, b = bases
+        player, source, destination = (str(uuid.uuid4()) for _ in range(3))
+        claim = {'playerId': player, 'sessionId': source, 'playerName': 'NativeFixture', 'proxyId': 'proxy-a', 'region': 'eu'}
+        status, result = request(a, '/v2/players/sessions', claim)
+        assert status == 201 and result['playerId'] == player and result['sessionId'] == source and result.get('leaseExpiresAt'), (status, result)
+        status, result = request(b, f'/v1/players/{player}/session')
+        assert status == 200 and result['proxyId'] == 'proxy-a', (status, result)
+        duplicate = dict(claim, sessionId=destination, proxyId='proxy-b')
+        status, _ = request(b, '/v2/players/sessions', duplicate)
+        assert status == 409, status
+        status, result = request(b, f'/v1/players/{player}/locale')
+        assert status == 200 and result['locale'] is None, (status, result)
+        # The scheduled subscriber intentionally starts after a one-minute delay.
+        for _ in range(90):
+            if all('Subscribed to settings invalidations' in docker('logs', name) for name in (first, second)):
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError('both native instances did not subscribe to settings invalidations')
+        status, result = request(b, f'/v1/players/{player}/locale')
+        assert status == 200 and result['locale'] is None, (status, result)
+        status, _ = request(a, f'/v1/players/{player}/locale', {'locale': 'de-DE'}, 'PUT')
+        assert status == 204, status
+        for _ in range(20):
+            status, result = request(b, f'/v1/players/{player}/locale')
+            if status == 200 and result['locale'] == 'de-DE':
+                break
+            time.sleep(0.25)
+        else:
+            raise AssertionError(f'remote cached locale was not invalidated: {status}, {result}')
+        status, handoff = request(a, f'/v2/players/{player}/session/transfer', {'sessionId': source})
+        assert status == 201 and handoff.get('token'), (status, handoff)
+        status, result = request(b, '/v2/players/sessions/transfer', {'playerId': player, 'sessionId': destination, 'handoffToken': handoff['token'], 'proxyId': 'proxy-b', 'region': 'eu'})
+        assert status == 201 and result['sessionId'] == destination, (status, result)
+        status, result = request(a, f'/v1/players/{player}/session')
+        assert status == 200 and result['proxyId'] == 'proxy-b', (status, result)
+        status, result = request(b, '/v2/players/sessions/heartbeats', {'sessions': [{'playerId': player, 'sessionId': destination}]})
+        assert status == 200 and result['updated'] == 1 and result['missing'] == 0, (status, result)
+        status, _ = request(a, f'/v2/players/{player}/session?sessionId={source}', method='DELETE')
+        assert status == 404, status
+        status, result = request(a, f'/v1/players/{player}/session')
+        assert status == 200 and result['proxyId'] == 'proxy-b', (status, result)
+        for name in (first, second):
+            logs = docker('logs', name)
+            assert 'ClassNotFoundException' not in logs and 'IllegalStateException: SSMSW' not in logs, 'native cache initialization failed'
+        print('Native Player: cross-proxy claim, handoff, global presence, NATS settings invalidation and stale logout passed')
+    except BaseException:
+        for name in (first, second):
+            print(docker('logs', name, check=False))
+        raise
+    finally:
+        for name in (first, second, nats, database):
+            docker('rm', '-f', name, check=False)
+        docker('network', 'rm', network, check=False)
+
+
+if __name__ == '__main__':
+    main()

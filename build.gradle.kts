@@ -78,7 +78,7 @@ dependencies {
     implementation("io.quarkus:quarkus-scheduler")
     implementation("io.nats:jnats:2.26.4")
     // The settings cache: Caffeine in-process, the region's valkey-cache behind it.
-    implementation("com.github.ben-manes.caffeine:caffeine")
+    implementation("io.quarkus:quarkus-caffeine")
     implementation("io.quarkus:quarkus-redis-client")
     implementation("io.quarkus:quarkus-opentelemetry")
     // Prometheus metrics on /q/metrics — JVM, HTTP and the Agroal pool.
