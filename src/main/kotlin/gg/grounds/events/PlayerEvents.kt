@@ -19,6 +19,7 @@ import java.util.UUID
  * Timestamps are ISO-8601 UTC truncated to microseconds — Postgres' precision, so the writer's
  * "never older than what is stored" comparisons see exactly the value the region stamped.
  */
+@RegisterForReflection
 object PlayerEvents {
     const val NAME_SEEN_PREFIX = "player.name.seen."
     const val SERVER_CHANGED_PREFIX = "player.session.server-changed."
@@ -27,10 +28,8 @@ object PlayerEvents {
     /** What the writer's durable consumes; PLAYER_EVENTS holds nothing else. */
     const val CONSUMER_FILTER = "player.>"
 
-    @RegisterForReflection
     data class NameSeen(val playerId: String, val playerName: String, val seenAt: String)
 
-    @RegisterForReflection
     data class ServerChanged(
         val playerId: String,
         val sessionId: String,
@@ -38,7 +37,6 @@ object PlayerEvents {
         val changedAt: String,
     )
 
-    @RegisterForReflection
     data class SessionEnded(val playerId: String, val sessionId: String, val endedAt: String)
 
     fun stamp(at: Instant): Instant = at.truncatedTo(ChronoUnit.MICROS)
