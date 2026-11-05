@@ -43,3 +43,16 @@ devspace dev
 ## License
 
 Licensed under the GNU Affero General Public License v3.0
+
+## Web profile details
+
+Workload-authenticated `GET` and `PUT /v1/players/{playerId}/profile` read and
+atomically store `bio` (240 characters), `pronouns` (24), nullable `favouriteMode`
+and `showFavouriteMode`. Full writes validate every field before storage. The
+`player_profiles` table is keyed by network-wide Minecraft UUID and survives
+logouts, name changes and reconnects through another proxy. Unknown players
+start with empty details and can save before their first game connection.
+Read/write failures are 503, never empty defaults or a successful write.
+
+The player-facing service-account gateway derives the UUID from the verified
+player token; the Hub must not expose this workload endpoint directly.
