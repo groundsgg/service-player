@@ -117,4 +117,97 @@ class PlayerProfileResourceTest {
         }
         return id
     }
+
+    @Test
+    fun `ordered favourites survive reload and legacy edits retain extras`() {
+        val id = known()
+        val multi =
+            """{"bio":"Three","pronouns":"","favouriteMode":"duel","favouriteModes":["duel","getdown","survivalgames"],"showFavouriteMode":true}"""
+        put(id, multi).then().statusCode(200)
+        given()
+            .get(path(id))
+            .then()
+            .statusCode(200)
+            .body("favouriteModes", equalTo(listOf("duel", "getdown", "survivalgames")))
+        put(
+                id,
+                """{"bio":"Legacy edit","pronouns":"he/him","favouriteMode":"duel","showFavouriteMode":false}""",
+            )
+            .then()
+            .statusCode(200)
+        given()
+            .get(path(id))
+            .then()
+            .statusCode(200)
+            .body("bio", equalTo("Legacy edit"))
+            .body("favouriteModes", equalTo(listOf("duel", "getdown", "survivalgames")))
+        val invalidLists =
+            listOf(
+                "[\"duel\",\"duel\"]",
+                "[\"duel\",\"bedwars\",\"getdown\",\"keystone\"]",
+                "[\"unknown\"]",
+                "[42]",
+                "null",
+                "[\"bedwars\"]",
+            )
+        invalidLists.forEach { list ->
+            put(
+                    id,
+                    """{"bio":"Bad","pronouns":"","favouriteMode":"duel","favouriteModes":$list,"showFavouriteMode":true}""",
+                )
+                .then()
+                .statusCode(400)
+        }
+        given().get(path(id)).then().statusCode(200).body("bio", equalTo("Legacy edit"))
+        put(
+                id,
+                """{"bio":"Clear","pronouns":"","favouriteMode":null,"favouriteModes":[],"showFavouriteMode":true}""",
+            )
+            .then()
+            .statusCode(200)
+        given()
+            .get(path(id))
+            .then()
+            .statusCode(200)
+            .body("favouriteModes", equalTo(emptyList<String>()))
+    }
+
+    @Test
+    fun `old SQL writers remain compatible after migration and rollback`() {
+        val id = known()
+        fun legacy(sql: String) {
+            dataSource.connection.use { c ->
+                c.prepareStatement(sql).use { statement ->
+                    statement.setObject(1, id)
+                    statement.executeUpdate()
+                }
+            }
+        }
+        legacy("INSERT INTO player_profiles(player_id, favourite_mode) VALUES (?, 'duel')")
+        given().get(path(id)).then().statusCode(200).body("favouriteModes", equalTo(listOf("duel")))
+        put(
+                id,
+                """{"bio":"Multi","pronouns":"","favouriteMode":"duel","favouriteModes":["duel","getdown"],"showFavouriteMode":true}""",
+            )
+            .then()
+            .statusCode(200)
+        legacy("UPDATE player_profiles SET bio = 'Old text edit' WHERE player_id = ?")
+        given()
+            .get(path(id))
+            .then()
+            .statusCode(200)
+            .body("favouriteModes", equalTo(listOf("duel", "getdown")))
+        legacy("UPDATE player_profiles SET favourite_mode = 'bedwars' WHERE player_id = ?")
+        given()
+            .get(path(id))
+            .then()
+            .statusCode(200)
+            .body("favouriteModes", equalTo(listOf("bedwars")))
+        legacy("UPDATE player_profiles SET favourite_mode = NULL WHERE player_id = ?")
+        given()
+            .get(path(id))
+            .then()
+            .statusCode(200)
+            .body("favouriteModes", equalTo(emptyList<String>()))
+    }
 }

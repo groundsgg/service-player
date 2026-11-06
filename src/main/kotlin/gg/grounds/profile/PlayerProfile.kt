@@ -10,6 +10,7 @@ data class PlayerProfile(
     val pronouns: String = "",
     val favouriteMode: String? = null,
     val showFavouriteMode: Boolean = false,
+    val favouriteModes: List<String> = listOfNotNull(favouriteMode),
 ) {
     companion object {
         private val fields = setOf("bio", "pronouns", "favouriteMode", "showFavouriteMode")
@@ -27,7 +28,12 @@ data class PlayerProfile(
             )
 
         fun parse(body: JsonNode?): PlayerProfile {
-            if (body == null || !body.isObject || body.fieldNames().asSequence().toSet() != fields)
+            if (
+                body == null ||
+                    !body.isObject ||
+                    body.fieldNames().asSequence().toSet() !in
+                        setOf(fields, fields + "favouriteModes")
+            )
                 throw InvalidRequestException(
                     "Send bio, pronouns, favouriteMode and showFavouriteMode only."
                 )
@@ -49,6 +55,27 @@ data class PlayerProfile(
                 throw InvalidRequestException("pronouns must be text of at most 24 characters.")
             if (!mode.isNull && (!mode.isTextual || mode.textValue() !in modes))
                 throw InvalidRequestException("favouriteMode must be a known mode or null.")
+            val favourites =
+                if (body.has("favouriteModes")) {
+                    val list = body.path("favouriteModes")
+                    if (
+                        !list.isArray ||
+                            list.size() > 3 ||
+                            list.any { !it.isTextual || it.textValue() !in modes }
+                    )
+                        throw InvalidRequestException(
+                            "favouriteModes must contain at most three known modes."
+                        )
+                    val values = list.map { it.textValue() }
+                    if (
+                        values.distinct().size != values.size ||
+                            values.firstOrNull() != mode.textValue()
+                    )
+                        throw InvalidRequestException(
+                            "favouriteModes must be unique and start with favouriteMode."
+                        )
+                    values
+                } else listOfNotNull(mode.textValue())
             if (!show.isBoolean)
                 throw InvalidRequestException("showFavouriteMode must be a boolean.")
             return PlayerProfile(
@@ -56,6 +83,7 @@ data class PlayerProfile(
                 pronouns.textValue(),
                 mode.textValue(),
                 show.booleanValue(),
+                favourites,
             )
         }
     }

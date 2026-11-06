@@ -14,7 +14,7 @@ class PlayerProfileRepository(private val dataSource: DataSource) {
         dataSource.connection.use { connection ->
             connection
                 .prepareStatement(
-                    "SELECT bio, pronouns, favourite_mode, show_favourite_mode FROM player_profiles WHERE player_id = ?"
+                    "SELECT bio, pronouns, favourite_mode, show_favourite_mode, favourite_modes FROM player_profiles WHERE player_id = ?"
                 )
                 .use { statement ->
                     statement.setObject(1, player)
@@ -25,6 +25,13 @@ class PlayerProfileRepository(private val dataSource: DataSource) {
                                 rows.getString(2),
                                 rows.getString(3),
                                 rows.getBoolean(4),
+                                rows.getArray(5).let { array ->
+                                    try {
+                                        (array.array as Array<*>).map { it.toString() }
+                                    } finally {
+                                        array.free()
+                                    }
+                                },
                             )
                         else PlayerProfile()
                     }
@@ -32,15 +39,21 @@ class PlayerProfileRepository(private val dataSource: DataSource) {
         }
 
     @Fresh
-    fun save(player: UUID, profile: PlayerProfile): PlayerProfile {
+    fun save(
+        player: UUID,
+        profile: PlayerProfile,
+        replaceFavourites: Boolean = true,
+    ): PlayerProfile {
         dataSource.connection.use { connection ->
             connection
                 .prepareStatement(
                     """
-                    INSERT INTO player_profiles (player_id, bio, pronouns, favourite_mode, show_favourite_mode)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO player_profiles (player_id, bio, pronouns, favourite_mode, show_favourite_mode, favourite_modes)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT (player_id) DO UPDATE SET bio = EXCLUDED.bio, pronouns = EXCLUDED.pronouns,
-                        favourite_mode = EXCLUDED.favourite_mode, show_favourite_mode = EXCLUDED.show_favourite_mode
+                        favourite_mode = EXCLUDED.favourite_mode, show_favourite_mode = EXCLUDED.show_favourite_mode,
+                        favourite_modes = CASE WHEN ? OR player_profiles.favourite_mode IS DISTINCT FROM EXCLUDED.favourite_mode
+                            THEN EXCLUDED.favourite_modes ELSE player_profiles.favourite_modes END
                     """
                         .trimIndent()
                 )
@@ -50,9 +63,17 @@ class PlayerProfileRepository(private val dataSource: DataSource) {
                     statement.setString(3, profile.pronouns)
                     statement.setString(4, profile.favouriteMode)
                     statement.setBoolean(5, profile.showFavouriteMode)
-                    statement.executeUpdate()
+                    val modes =
+                        connection.createArrayOf("varchar", profile.favouriteModes.toTypedArray())
+                    try {
+                        statement.setArray(6, modes)
+                        statement.setBoolean(7, replaceFavourites)
+                        statement.executeUpdate()
+                    } finally {
+                        modes.free()
+                    }
                 }
         }
-        return profile
+        return read(player)
     }
 }

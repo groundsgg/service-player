@@ -31,7 +31,7 @@ class PlayerProfileResource(private val profiles: PlayerProfileRepository) {
     fun put(@PathParam("playerId") playerId: String, body: JsonNode?): PlayerProfile {
         val player = id(playerId)
         val profile = PlayerProfile.parse(body)
-        return store { profiles.save(player, profile) }
+        return store { profiles.save(player, profile, body?.has("favouriteModes") == true) }
     }
 
     private fun id(value: String): UUID =
