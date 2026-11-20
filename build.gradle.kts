@@ -76,7 +76,7 @@ dependencies {
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
     implementation("io.quarkus:quarkus-scheduler")
-    implementation("io.nats:jnats:2.26.4")
+    implementation("io.nats:jnats:2.27.0")
     // The settings cache: Caffeine in-process, the region's valkey-cache behind it.
     implementation("io.quarkus:quarkus-caffeine")
     implementation("io.quarkus:quarkus-redis-client")
